@@ -1,0 +1,5 @@
+{
+  "name": "UGC Video Studio",
+  "description": "Generate UGC videos from model and product photos using Gemini and Veo.",
+  "requestFramePermissions": []
+}
