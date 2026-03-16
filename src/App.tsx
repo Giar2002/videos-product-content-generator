@@ -3,7 +3,7 @@ import { ApiKeyGate, useApiKey } from './components/ApiKeyGate';
 import { ImageUploader } from './components/ImageUploader';
 import { HumanModelGenerator } from './components/HumanModelGenerator';
 import { GoogleGenAI, Type } from '@google/genai';
-import { Loader2, LayoutTemplate, Image as ImageIcon, FileText, Download, PlaySquare, Copy, Sparkles, UserPlus, Video, AlertCircle, X, Key } from 'lucide-react';
+import { Loader2, LayoutTemplate, Image as ImageIcon, FileText, Download, PlaySquare, Copy, Sparkles, UserPlus, Video, AlertCircle, X, Key, ArrowRight, RotateCcw, Hand, User, RefreshCw } from 'lucide-react';
 
 interface Scene {
   id: string;
@@ -50,12 +50,21 @@ function AppContent() {
   const { hasKey, requireKey } = useApiKey();
   const [aiQuality, setAiQuality] = useState<'free' | 'pro'>('free');
 
+  const [view, setView] = useState<'landing' | 'mode' | 'workspace'>('landing');
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+
   const [modelImageData, setModelImageData] = useState<string | null>(null);
   const [productImageData, setProductImageData] = useState<string | null>(null);
   const [productName, setProductName] = useState("");
   const [productDetails, setProductDetails] = useState("");
   const [backgroundScene, setBackgroundScene] = useState(BACKGROUND_OPTIONS[0]);
   const [numSegments, setNumSegments] = useState(1);
+  const [contentMode, setContentMode] = useState<'ugc' | 'pov'>('ugc');
+
+  // POV Specific State
+  const [handGender, setHandGender] = useState<'Pria' | 'Wanita'>('Wanita');
+  const [handSkinTone, setHandSkinTone] = useState<'Terang' | 'Sedang' | 'Gelap'>('Terang');
+  const [handClothing, setHandClothing] = useState<'Lengan Terbuka' | 'Kemeja Formal' | 'Sweater/Kasual'>('Lengan Terbuka');
 
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false);
@@ -81,83 +90,88 @@ function AppContent() {
     if (success) setAiQuality('pro');
   };
 
-  const handleProductImageChange = async (file: File | null, dataUrl: string | null) => {
-    setProductImageData(dataUrl);
-    
-    if (dataUrl) {
-      setIsGeneratingProductDetails(true);
-      try {
-        const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-        if (!apiKey) throw new Error("API key not found");
-        
-        const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: [
-            {
-              inlineData: {
-                mimeType: getMimeType(dataUrl),
-                data: getBase64(dataUrl)
-              }
-            },
-            "Analisis gambar produk ini. Berikan nama produk yang singkat dan jelas, serta 1 kalimat menarik (maksimal 15 kata) yang menjelaskan keunggulan utama atau pesan utama dari produk ini untuk keperluan iklan/promosi."
-          ],
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING, description: "Nama produk singkat" },
-                details: { type: Type.STRING, description: "1 kalimat keunggulan utama (maks 15 kata)" }
-              },
-              required: ["name", "details"]
-            }
-          }
-        });
-        
-        const result = JSON.parse(response.text || "{}");
-        if (result.name) setProductName(result.name);
-        if (result.details) setProductDetails(result.details);
-      } catch (err) {
-        console.error("Gagal auto-generate detail produk:", err);
-      } finally {
-        setIsGeneratingProductDetails(false);
+  const resetWorkspace = () => {
+    setModelImageData(null);
+    setProductImageData(null);
+    setProductName("");
+    setProductDetails("");
+    setScenes([]);
+    setCurrentStep(1);
+    setView('mode');
+  };
+
+  const handleNextStep = () => {
+    if (currentStep === 1) {
+      if (contentMode === 'ugc' && !modelImageData) {
+        setError("Silakan unggah atau buat Foto Model terlebih dahulu.");
+        return;
       }
+      if (!productImageData) {
+        setError("Silakan unggah Foto Produk.");
+        return;
+      }
+      setError(null);
+      setCurrentStep(2);
+    } else if (currentStep === 2) {
+      if (!productName || !productDetails) {
+        setError("Silakan lengkapi Nama Produk dan Detail/Keunggulan Produk.");
+        return;
+      }
+      setError(null);
+      setCurrentStep(3);
+      handleGenerateStoryboard();
     }
   };
 
   const handleGenerateStoryboard = async () => {
-    if (!modelImageData || !productImageData || !productName) {
-      setError("Mohon unggah foto model, foto produk, dan isi nama produk.");
+    if (!productImageData || !productName || !productDetails) {
+      setError("Mohon lengkapi semua data produk.");
+      return;
+    }
+    if (contentMode === 'ugc' && !modelImageData) {
+      setError("Mohon unggah foto model untuk mode UGC.");
       return;
     }
 
     setIsGeneratingStoryboard(true);
     setError(null);
-    setScenes([]);
-
     try {
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-      const ai = new GoogleGenAI({ apiKey });
-      const textModel = aiQuality === 'pro' && hasKey ? 'gemini-3.1-pro-preview' : 'gemini-3-flash-preview';
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       
-      const response = await ai.models.generateContent({
-        model: textModel,
-        contents: `Buatkan storyboard video UGC (User Generated Content) pendek yang sangat menarik.
+      const parts: any[] = [
+        { inlineData: { data: getBase64(productImageData), mimeType: getMimeType(productImageData) } }
+      ];
+
+      let modeContext = "";
+      if (contentMode === 'ugc') {
+        modeContext = "Ini adalah video UGC (User Generated Content) di mana seorang kreator berbicara langsung ke kamera dan mendemonstrasikan produk.";
+      } else {
+        modeContext = `Ini adalah video POV (Point of View) unboxing/review produk. Kamera mengambil sudut pandang orang pertama. Hanya tangan yang terlihat berinteraksi dengan produk. Karakteristik tangan: Gender ${handGender}, Warna Kulit ${handSkinTone}, Pakaian ${handClothing}. Wajah TIDAK BOLEH terlihat.`;
+      }
+
+      parts.push({
+        text: `Buat storyboard untuk video iklan TikTok/Reels sebanyak ${numSegments} segmen.
         Produk: ${productName}
         Detail: ${productDetails}
-        Latar Belakang Foto/Scene (Background): ${backgroundScene}
-        Jumlah Segmen Video: ${numSegments} (Setiap segmen berdurasi tepat 8 detik).
-        
-        ATURAN PENTING UNTUK SCRIPT VOICEOVER:
-        1. KONTINUITAS: Jika jumlah segmen lebih dari 1, script dari Segmen 1 hingga segmen terakhir harus menyambung menjadi satu cerita/kalimat yang utuh dan mengalir secara natural (tidak terputus-putus antar segmen).
-        2. BATAS KATA (SANGAT KETAT): Rata-rata orang berbicara 2-2.5 kata per detik. Untuk video 8 detik, script MAKSIMAL 12-15 kata per segmen. Jangan lebih dari 15 kata agar suara tidak terpotong di akhir video. Lebih baik sedikit lebih pendek (berhenti di detik ke-6 atau ke-7) daripada kepotong.
+        Latar Belakang: ${backgroundScene}
+        Konteks Mode: ${modeContext}
         
         Untuk setiap segmen, berikan:
-        1. Judul scene
-        2. Prompt visual untuk frame AWAL (deskripsikan aksi model dan produk, pastikan latar belakangnya adalah ${backgroundScene}).
-        3. Prompt visual untuk frame AKHIR (aksi lanjutan, maksimal 8 detik setelah frame awal, latar belakang tetap ${backgroundScene}).
-        4. Script Voiceover (Maksimal 15 kata, menyambung dengan segmen sebelumnya/selanjutnya).`,
+        1. Judul segmen
+        2. Prompt visual awal (deskripsi sangat detail tentang posisi produk, ${contentMode === 'ugc' ? 'ekspresi model' : 'posisi tangan'}, pencahayaan, dan latar belakang di awal segmen)
+        3. Prompt visual akhir (deskripsi sangat detail tentang perubahan posisi, aksi, atau hasil di akhir segmen)
+        4. Script voiceover yang menarik dan natural (bahasa Indonesia gaul/kasual)
+        
+        PENTING UNTUK PROMPT VISUAL:
+        - Harus dalam bahasa Inggris.
+        - Harus sangat deskriptif (pencahayaan, sudut kamera, warna, tekstur).
+        - ${contentMode === 'ugc' ? 'Jelaskan ekspresi wajah dan bahasa tubuh kreator.' : 'Jelaskan posisi tangan, interaksi dengan produk, dan pastikan menyebutkan "first-person POV, only hands visible, no face".'}
+        - Sebutkan latar belakang "${backgroundScene}" secara spesifik.`
+      });
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.1-pro-preview',
+        contents: { parts },
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -176,164 +190,152 @@ function AppContent() {
         }
       });
 
-      const generatedScenesData = JSON.parse(response.text || "[]");
-      const newScenes: Scene[] = generatedScenesData.slice(0, numSegments).map((s: any, index: number) => ({
-        id: `scene-${index}`,
-        title: s.title,
-        startVisualPrompt: s.startVisualPrompt,
-        endVisualPrompt: s.endVisualPrompt,
-        script: s.script,
-        status: 'idle',
-        useVoiceOver: true
-      }));
-
-      setScenes(newScenes);
-      generateAllImages(newScenes);
-
+      const generatedScenes = JSON.parse(response.text || "[]");
+      setScenes(generatedScenes.map((s: any) => ({ ...s, id: Math.random().toString(36).substring(7), status: 'idle' })));
     } catch (err: any) {
-      setError(err.message || "Gagal membuat storyboard.");
+      setError(err.message || "Gagal membuat storyboard");
+    } finally {
       setIsGeneratingStoryboard(false);
     }
   };
 
-  const generateAllImages = async (currentScenes: Scene[]) => {
-    setIsGeneratingStoryboard(false);
+  const generateAllImages = async () => {
     setIsGeneratingImages(true);
-    let updatedScenes = [...currentScenes];
+    
+    const updatedScenes = [...scenes];
     
     for (let i = 0; i < updatedScenes.length; i++) {
       updatedScenes[i].status = 'generating_images';
       setScenes([...updatedScenes]);
       
       try {
-        const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-        const ai = new GoogleGenAI({ apiKey });
-        const imageModel = aiQuality === 'pro' && hasKey ? 'gemini-3.1-flash-image-preview' : 'gemini-2.5-flash-image';
-        const baseParts = [
-          { inlineData: { data: getBase64(modelImageData!), mimeType: getMimeType(modelImageData!) } },
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const modelName = aiQuality === 'pro' ? 'gemini-3.1-flash-image-preview' : 'gemini-2.5-flash-image';
+        
+        const baseParts: any[] = [
           { inlineData: { data: getBase64(productImageData!), mimeType: getMimeType(productImageData!) } }
         ];
 
-        const startRes = await ai.models.generateContent({
-          model: imageModel,
-          contents: { parts: [...baseParts, { text: `Create a realistic UGC photo of this person using this product. The background MUST be: ${backgroundScene}. Context: ${updatedScenes[i].startVisualPrompt}.` }] },
-          config: { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } }
-        });
-        updatedScenes[i].startImageUrl = extractImage(startRes);
+        let modeSpecificPrompt = "";
+        if (contentMode === 'ugc' && modelImageData) {
+          baseParts.push({ inlineData: { data: getBase64(modelImageData), mimeType: getMimeType(modelImageData) } });
+          modeSpecificPrompt = "A UGC creator looking at the camera. ";
+        } else if (contentMode === 'pov') {
+          modeSpecificPrompt = `First-person POV, looking down at hands holding or interacting with the product. ${handGender} hands, ${handSkinTone} skin tone, wearing ${handClothing}. NO FACE VISIBLE. `;
+        }
 
-        const endRes = await ai.models.generateContent({
-          model: imageModel,
-          contents: { parts: [...baseParts, { text: `Create a realistic UGC photo of this person using this product. The background MUST be: ${backgroundScene}. Context: ${updatedScenes[i].endVisualPrompt}.` }] },
-          config: { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } }
+        // Generate Start Image
+        const startResponse = await ai.models.generateContent({
+          model: modelName,
+          contents: {
+            parts: [
+              ...baseParts,
+              { text: `Generate a photorealistic image. ${modeSpecificPrompt} ${updatedScenes[i].startVisualPrompt}. Background: ${backgroundScene}. High quality, cinematic lighting.` }
+            ]
+          },
+          config: aiQuality === 'pro' ? { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } } : undefined
         });
-        updatedScenes[i].endImageUrl = extractImage(endRes);
+        updatedScenes[i].startImageUrl = extractImage(startResponse);
 
+        // Generate End Image
+        const endResponse = await ai.models.generateContent({
+          model: modelName,
+          contents: {
+            parts: [
+              ...baseParts,
+              { text: `Generate a photorealistic image. ${modeSpecificPrompt} ${updatedScenes[i].endVisualPrompt}. Background: ${backgroundScene}. High quality, cinematic lighting.` }
+            ]
+          },
+          config: aiQuality === 'pro' ? { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } } : undefined
+        });
+        updatedScenes[i].endImageUrl = extractImage(endResponse);
+        
         updatedScenes[i].status = 'images_done';
       } catch (err: any) {
         updatedScenes[i].status = 'error';
         updatedScenes[i].error = err.message;
       }
+      
       setScenes([...updatedScenes]);
     }
+    
     setIsGeneratingImages(false);
     setShowTutorialModal(true);
   };
 
-  const handleGenerateVideoClick = (sceneIndex: number) => {
-    setVideoWarningSceneIndex(sceneIndex);
-  };
+  const handleGenerateVideo = async (sceneIndex: number) => {
+    if (aiQuality !== 'pro') {
+      setVideoWarningSceneIndex(sceneIndex);
+      return;
+    }
 
-  const handleDownloadAllAssets = () => {
-    scenes.forEach((scene, index) => {
-      if (scene.startImageUrl) {
-        const a = document.createElement('a');
-        a.href = scene.startImageUrl;
-        a.download = `segmen-${index + 1}-awal.png`;
-        a.click();
-      }
-      if (scene.endImageUrl) {
-        const a = document.createElement('a');
-        a.href = scene.endImageUrl;
-        a.download = `segmen-${index + 1}-akhir.png`;
-        a.click();
-      }
-      if (scene.videoUrl) {
-        const a = document.createElement('a');
-        a.href = scene.videoUrl;
-        a.download = `segmen-${index + 1}-video.mp4`;
-        a.click();
-      }
+    const scene = scenes[sceneIndex];
+    if (!scene.startImageUrl || !scene.endImageUrl) return;
+
+    setScenes(prev => {
+      const newScenes = [...prev];
+      newScenes[sceneIndex].status = 'generating_video';
+      newScenes[sceneIndex].videoProgress = 'Memulai pembuatan video... (Bisa memakan waktu 2-5 menit)';
+      return newScenes;
     });
-  };
-
-  const handleConfirmGenerateVideo = async () => {
-    if (videoWarningSceneIndex === null) return;
-    const sceneIndex = videoWarningSceneIndex;
-    setVideoWarningSceneIndex(null);
-
-    const success = await requireKey();
-    if (!success) return;
-
-    let updatedScenes = [...scenes];
-    updatedScenes[sceneIndex].status = 'generating_video';
-    updatedScenes[sceneIndex].videoProgress = 'Initializing...';
-    setScenes([...updatedScenes]);
 
     try {
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-      const ai = new GoogleGenAI({ apiKey });
-      const scene = updatedScenes[sceneIndex];
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       
+      let videoPrompt = "";
+      if (contentMode === 'ugc') {
+        videoPrompt = `Smooth transition from start frame to end frame. The creator is speaking to the camera, demonstrating the product. Natural lip sync and subtle body movements. ${scene.script}`;
+      } else {
+        videoPrompt = `Smooth transition from start frame to end frame. First-person POV. Hands are interacting with the product. Natural hand movements. No face visible.`;
+      }
+
       let operation = await ai.models.generateVideos({
         model: 'veo-3.1-fast-generate-preview',
-        prompt: `UGC video. ${scene.startVisualPrompt} transitioning to ${scene.endVisualPrompt}`,
+        prompt: videoPrompt,
         image: {
-          imageBytes: getBase64(scene.startImageUrl!),
-          mimeType: getMimeType(scene.startImageUrl!),
+          imageBytes: getBase64(scene.startImageUrl),
+          mimeType: getMimeType(scene.startImageUrl),
         },
         config: {
           numberOfVideos: 1,
-          resolution: '720p',
-          aspectRatio: '9:16',
+          resolution: '1080p',
           lastFrame: {
-            imageBytes: getBase64(scene.endImageUrl!),
-            mimeType: getMimeType(scene.endImageUrl!),
-          }
+            imageBytes: getBase64(scene.endImageUrl),
+            mimeType: getMimeType(scene.endImageUrl),
+          },
+          aspectRatio: '9:16'
         }
       });
 
-      let attempts = 0;
       while (!operation.done) {
-        await new Promise(r => setTimeout(r, 10000));
-        attempts++;
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        operation = await ai.operations.getVideosOperation({operation: operation});
         setScenes(prev => {
           const newScenes = [...prev];
-          newScenes[sceneIndex].videoProgress = `Generating... (Attempt ${attempts})`;
+          newScenes[sceneIndex].videoProgress = 'Sedang memproses video... Harap tunggu.';
           return newScenes;
         });
-        operation = await ai.operations.getVideosOperation({operation: operation});
       }
 
-      if (operation.error) throw new Error((operation.error as any).message || "Video failed");
-
       const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (!downloadLink) throw new Error("No video URL");
-
-      const response = await fetch(downloadLink, {
-        method: 'GET',
-        headers: { 'x-goog-api-key': apiKey || '' },
-      });
       
-      if (!response.ok) throw new Error("Failed to download video");
-      
-      const blob = await response.blob();
-      setScenes(prev => {
-        const newScenes = [...prev];
-        newScenes[sceneIndex].videoUrl = URL.createObjectURL(blob);
-        newScenes[sceneIndex].status = 'video_done';
-        return newScenes;
-      });
-
+      if (downloadLink) {
+        const response = await fetch(downloadLink, {
+          method: 'GET',
+          headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY || '' },
+        });
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        
+        setScenes(prev => {
+          const newScenes = [...prev];
+          newScenes[sceneIndex].videoUrl = url;
+          newScenes[sceneIndex].status = 'video_done';
+          return newScenes;
+        });
+      } else {
+        throw new Error("Gagal mendapatkan link video");
+      }
     } catch (err: any) {
       setScenes(prev => {
         const newScenes = [...prev];
@@ -344,325 +346,546 @@ function AppContent() {
     }
   };
 
+  const copyVideoPrompt = (scene: Scene) => {
+    let prompt = "";
+    if (contentMode === 'ugc') {
+      prompt = `Camera: Static frontal shot, UGC style.\nContext: Creator is speaking directly to the camera, demonstrating a product. Natural lip sync required.\nEnvironment: ${backgroundScene}\nAction: Transition smoothly from the start frame to the end frame. ${scene.startVisualPrompt} -> ${scene.endVisualPrompt}\nVoiceover context: "${scene.script}"`;
+    } else {
+      prompt = `Camera: First-person POV, looking down at hands.\nContext: Hands interacting with a product. NO FACE VISIBLE.\nEnvironment: ${backgroundScene}\nAction: Transition smoothly from the start frame to the end frame. ${scene.startVisualPrompt} -> ${scene.endVisualPrompt}\nNegative prompt: face, head, person looking at camera.`;
+    }
+    navigator.clipboard.writeText(prompt);
+    alert("Prompt video berhasil disalin! Gunakan prompt ini di Google AI Studio (Veo 3.1) bersama dengan gambar awal dan akhir.");
+  };
+
+  // --- VIEWS ---
+
+  if (view === 'landing') {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-emerald-500/30 flex flex-col">
+        <header className="border-b border-zinc-800 bg-zinc-950/50 backdrop-blur-md sticky top-0 z-10">
+          <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                <LayoutTemplate className="w-5 h-5 text-zinc-950" />
+              </div>
+              <h1 className="text-xl font-semibold tracking-tight">FrameFlow</h1>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 flex items-center justify-center p-4">
+          <div className="max-w-3xl mx-auto text-center space-y-8">
+            <h2 className="text-5xl md:text-7xl font-bold tracking-tighter bg-gradient-to-br from-white to-zinc-500 bg-clip-text text-transparent">
+              Buat Video Iklan<br />Lebih Cepat & Mudah
+            </h2>
+            <p className="text-lg md:text-xl text-zinc-400 max-w-2xl mx-auto leading-relaxed">
+              FrameFlow membantu Anda merancang storyboard, menghasilkan aset visual, dan membuat video iklan bergaya UGC atau POV hanya dalam hitungan menit menggunakan kekuatan AI.
+            </p>
+            <button 
+              onClick={() => setView('mode')}
+              className="inline-flex items-center gap-2 px-8 py-4 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-full transition-all hover:scale-105 shadow-xl shadow-emerald-500/20"
+            >
+              Mulai Sekarang <ArrowRight className="w-5 h-5" />
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (view === 'mode') {
+    return (
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-emerald-500/30 flex flex-col">
+        <header className="border-b border-zinc-800 bg-zinc-950/50 backdrop-blur-md sticky top-0 z-10">
+          <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('landing')}>
+              <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                <LayoutTemplate className="w-5 h-5 text-zinc-950" />
+              </div>
+              <h1 className="text-xl font-semibold tracking-tight">FrameFlow</h1>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 max-w-5xl mx-auto px-4 py-12 w-full">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold mb-4">Pilih Mode Pembuatan</h2>
+            <p className="text-zinc-400">Pilih gaya video yang ingin Anda buat hari ini.</p>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* UGC Mode Card */}
+            <button 
+              onClick={() => { setContentMode('ugc'); setView('workspace'); setCurrentStep(1); }}
+              className="group relative bg-zinc-900 border border-zinc-800 hover:border-emerald-500/50 rounded-3xl p-8 text-left transition-all hover:shadow-2xl hover:shadow-emerald-500/10 overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
+                <User className="w-32 h-32 text-emerald-500" />
+              </div>
+              <div className="relative z-10">
+                <div className="w-14 h-14 bg-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mb-6">
+                  <User className="w-7 h-7" />
+                </div>
+                <h3 className="text-2xl font-bold mb-3">UGC Creator Mode</h3>
+                <p className="text-zinc-400 leading-relaxed mb-6">
+                  Buat video bergaya User Generated Content. Anda akan membutuhkan foto model wajah (atau buat dengan AI) yang akan seolah-olah berbicara ke kamera untuk mempromosikan produk Anda.
+                </p>
+                <div className="flex items-center text-emerald-400 font-medium gap-2 group-hover:translate-x-2 transition-transform">
+                  Pilih Mode Ini <ArrowRight className="w-4 h-4" />
+                </div>
+              </div>
+            </button>
+
+            {/* POV Mode Card */}
+            <button 
+              onClick={() => { setContentMode('pov'); setView('workspace'); setCurrentStep(1); }}
+              className="group relative bg-zinc-900 border border-zinc-800 hover:border-blue-500/50 rounded-3xl p-8 text-left transition-all hover:shadow-2xl hover:shadow-blue-500/10 overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
+                <Hand className="w-32 h-32 text-blue-500" />
+              </div>
+              <div className="relative z-10">
+                <div className="w-14 h-14 bg-blue-500/20 text-blue-400 rounded-2xl flex items-center justify-center mb-6">
+                  <Hand className="w-7 h-7" />
+                </div>
+                <h3 className="text-2xl font-bold mb-3">POV Unboxing Mode</h3>
+                <p className="text-zinc-400 leading-relaxed mb-6">
+                  Buat video dari sudut pandang orang pertama (Point of View). Wajah tidak terlihat, hanya tangan yang berinteraksi dengan produk. Cocok untuk unboxing, tutorial, atau review detail produk.
+                </p>
+                <div className="flex items-center text-blue-400 font-medium gap-2 group-hover:translate-x-2 transition-transform">
+                  Pilih Mode Ini <ArrowRight className="w-4 h-4" />
+                </div>
+              </div>
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // WORKSPACE VIEW
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-emerald-500/30 pb-20">
-      <header className="border-b border-zinc-800 bg-zinc-950/50 backdrop-blur-md sticky top-0 z-10">
+      <header className="border-b border-zinc-800 bg-zinc-950/50 backdrop-blur-md sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center shadow-lg shadow-emerald-500/20">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setView('landing')}>
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center shadow-lg ${contentMode === 'ugc' ? 'bg-emerald-500 shadow-emerald-500/20' : 'bg-blue-500 shadow-blue-500/20'}`}>
               <LayoutTemplate className="w-5 h-5 text-zinc-950" />
             </div>
-            <h1 className="text-xl font-semibold tracking-tight">UGC Storyboard Creator</h1>
+            <h1 className="text-xl font-semibold tracking-tight">
+              FrameFlow <span className="text-zinc-500 font-normal text-sm ml-2">| {contentMode === 'ugc' ? 'UGC Mode' : 'POV Mode'}</span>
+            </h1>
           </div>
           
-          <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+          <div className="flex items-center gap-4">
             <button 
-              onClick={() => handleQualityChange('free')}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${aiQuality === 'free' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+              onClick={resetWorkspace}
+              className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+              title="Reset Konfigurasi"
             >
-              Gratis (Standard)
+              <RotateCcw className="w-4 h-4" />
+              <span className="hidden sm:inline">Reset</span>
             </button>
-            <button 
-              onClick={() => handleQualityChange('pro')}
-              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1 ${aiQuality === 'pro' ? 'bg-emerald-500/20 text-emerald-400' : 'text-zinc-400 hover:text-zinc-200'}`}
-            >
-              <Sparkles className="w-3 h-3" /> Pro (High Quality)
-            </button>
+            <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+              <button 
+                onClick={() => handleQualityChange('free')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${aiQuality === 'free' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+              >
+                Gratis (Standard)
+              </button>
+              <button 
+                onClick={() => handleQualityChange('pro')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1 ${aiQuality === 'pro' ? 'bg-emerald-500/20 text-emerald-400' : 'text-zinc-400 hover:text-zinc-200'}`}
+              >
+                <Sparkles className="w-3 h-3" /> Pro
+              </button>
+            </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
-          {/* Left Column: Inputs */}
-          <div className="lg:col-span-4 space-y-6">
-            
-            {/* Human Model Generator */}
-            <HumanModelGenerator 
-              onModelGenerated={setModelImageData} 
-              aiQuality={aiQuality} 
-              hasKey={hasKey} 
-            />
+      <main className="max-w-5xl mx-auto px-4 py-8">
+        
+        {/* Step Indicator */}
+        <div className="flex items-center justify-center mb-12">
+          <div className="flex items-center gap-4">
+            {[1, 2, 3].map((step) => (
+              <React.Fragment key={step}>
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-colors ${currentStep === step ? (contentMode === 'ugc' ? 'bg-emerald-500 text-zinc-950' : 'bg-blue-500 text-zinc-950') : currentStep > step ? 'bg-zinc-800 text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-500'}`}>
+                  {step}
+                </div>
+                {step < 3 && (
+                  <div className={`w-16 h-1 rounded-full ${currentStep > step ? 'bg-zinc-800' : 'bg-zinc-900'}`} />
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
 
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-6">
-              <h2 className="text-lg font-medium flex items-center gap-2">
-                <span className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold text-zinc-400">1</span>
-                Aset Dasar
-              </h2>
-              <div className="grid grid-cols-2 gap-4">
-                <ImageUploader 
-                  label="Foto Model" 
-                  image={modelImageData} 
-                  onImageChange={(_, d) => setModelImageData(d)} 
-                />
+        {error && (
+          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3 text-red-400">
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+            <p className="text-sm">{error}</p>
+          </div>
+        )}
+
+        {/* Step 1: Assets */}
+        {currentStep === 1 && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-bold mb-2">Siapkan Aset Visual</h2>
+              <p className="text-zinc-400">Unggah foto produk dan atur karakter untuk video Anda.</p>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+                <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
+                  <ImageIcon className="w-5 h-5 text-zinc-400" /> Foto Produk Utama
+                </h3>
                 <ImageUploader 
                   label="Foto Produk" 
                   image={productImageData} 
-                  onImageChange={handleProductImageChange} 
+                  onImageChange={(_, d) => setProductImageData(d)} 
                 />
               </div>
-            </div>
 
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-6">
-              <h2 className="text-lg font-medium flex items-center gap-2">
-                <span className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold text-zinc-400">2</span>
-                Detail Produk & Video
-              </h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-zinc-400 mb-2 flex items-center gap-2">
-                    Nama Produk
-                    {isGeneratingProductDetails && <Loader2 className="w-3 h-3 animate-spin text-emerald-500" />}
-                  </label>
-                  <input 
-                    type="text" value={productName} onChange={(e) => setProductName(e.target.value)}
-                    placeholder="Contoh: Glow Serum Vitamin C"
-                    disabled={isGeneratingProductDetails}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50 disabled:opacity-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-zinc-400 mb-2 flex items-center gap-2">
-                    Keunggulan / Pesan Utama
-                    {isGeneratingProductDetails && <Loader2 className="w-3 h-3 animate-spin text-emerald-500" />}
-                  </label>
-                  <textarea 
-                    value={productDetails} onChange={(e) => setProductDetails(e.target.value)}
-                    placeholder="Contoh: Mencerahkan kulit dalam 7 hari..."
-                    disabled={isGeneratingProductDetails}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm h-20 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/50 disabled:opacity-50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-zinc-400 mb-2">Latar Belakang Foto/Scene (Konsisten)</label>
-                  <select 
-                    value={backgroundScene} onChange={(e) => setBackgroundScene(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
-                  >
-                    {BACKGROUND_OPTIONS.map((option) => (
-                      <option key={option} value={option}>{option}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-zinc-400 mb-2">Durasi Video (Jumlah Segmen)</label>
-                  <select 
-                    value={numSegments} onChange={(e) => setNumSegments(Number(e.target.value))}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
-                  >
-                    <option value={1}>1 Segmen (8 detik, 2 Gambar)</option>
-                    <option value={2}>2 Segmen (16 detik, 4 Gambar)</option>
-                    <option value={3}>3 Segmen (24 detik, 6 Gambar)</option>
-                    <option value={4}>4 Segmen (32 detik, 8 Gambar)</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={handleGenerateStoryboard}
-              disabled={isGeneratingStoryboard || isGeneratingImages || !modelImageData || !productImageData || !productName}
-              className="w-full py-4 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20"
-            >
-              {isGeneratingStoryboard ? (
-                <><Loader2 className="w-5 h-5 animate-spin" /> Menyusun Storyboard...</>
-              ) : isGeneratingImages ? (
-                <><Loader2 className="w-5 h-5 animate-spin" /> Membuat Gambar Scene...</>
-              ) : (
-                <><LayoutTemplate className="w-5 h-5" /> Buat Storyboard & Scene</>
-              )}
-            </button>
-            
-            {error && <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">{error}</div>}
-          </div>
-
-          {/* Right Column: Storyboard Output */}
-          <div className="lg:col-span-8">
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 min-h-[600px] flex flex-col">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-medium flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-xs font-bold text-zinc-400">3</span>
-                  Hasil Storyboard
-                </h2>
-                {scenes.length > 0 && (
-                  <button 
-                    onClick={() => navigator.clipboard.writeText(scenes.map((s, i) => `SCENE ${i + 1}: ${s.title}\nVoiceover: "${s.script}"\n`).join('\n---\n\n'))}
-                    className="text-sm flex items-center gap-2 text-zinc-400 hover:text-white transition-colors bg-zinc-800 hover:bg-zinc-700 px-3 py-1.5 rounded-lg"
-                  >
-                    <Copy className="w-4 h-4" /> Salin Semua Script
-                  </button>
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+                {contentMode === 'ugc' ? (
+                  <>
+                    <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
+                      <User className="w-5 h-5 text-zinc-400" /> Karakter Model (UGC)
+                    </h3>
+                    <div className="space-y-4">
+                      <ImageUploader 
+                        label="Foto Model Wajah" 
+                        image={modelImageData} 
+                        onImageChange={(_, d) => setModelImageData(d)} 
+                      />
+                      <div className="relative">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-zinc-800"></div>
+                        </div>
+                        <div className="relative flex justify-center text-xs">
+                          <span className="bg-zinc-900 px-2 text-zinc-500">ATAU BUAT DENGAN AI</span>
+                        </div>
+                      </div>
+                      <HumanModelGenerator 
+                        onModelGenerated={setModelImageData} 
+                        aiQuality={aiQuality} 
+                        hasKey={hasKey} 
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
+                      <Hand className="w-5 h-5 text-zinc-400" /> Karakteristik Tangan (POV)
+                    </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-400 mb-2">Gender Tangan</label>
+                        <div className="flex gap-2">
+                          {['Pria', 'Wanita'].map(g => (
+                            <button key={g} onClick={() => setHandGender(g as any)} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${handGender === g ? 'bg-blue-500/20 border-blue-500 text-blue-400' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}>
+                              {g}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-400 mb-2">Warna Kulit</label>
+                        <div className="flex gap-2">
+                          {['Terang', 'Sedang', 'Gelap'].map(s => (
+                            <button key={s} onClick={() => setHandSkinTone(s as any)} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${handSkinTone === s ? 'bg-blue-500/20 border-blue-500 text-blue-400' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}>
+                              {s}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-400 mb-2">Pakaian/Lengan</label>
+                        <div className="flex gap-2">
+                          {['Lengan Terbuka', 'Kemeja Formal', 'Sweater/Kasual'].map(c => (
+                            <button key={c} onClick={() => setHandClothing(c as any)} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${handClothing === c ? 'bg-blue-500/20 border-blue-500 text-blue-400' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}>
+                              {c}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
+            </div>
 
-              {scenes.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-zinc-500 space-y-4">
-                  <div className="w-16 h-16 bg-zinc-800/50 rounded-full flex items-center justify-center">
-                    <LayoutTemplate className="w-8 h-8 opacity-50" />
-                  </div>
-                  <p>Isi form di sebelah kiri untuk menghasilkan storyboard.</p>
+            <div className="flex justify-end pt-4">
+              <button onClick={handleNextStep} className={`px-8 py-3 text-white font-medium rounded-xl transition-colors flex items-center gap-2 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}>
+                Lanjut ke Detail Produk <ArrowRight className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: Details */}
+        {currentStep === 2 && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-bold mb-2">Detail Produk & Latar</h2>
+              <p className="text-zinc-400">Berikan informasi tentang produk agar AI dapat membuat script yang relevan.</p>
+            </div>
+
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-6 max-w-2xl mx-auto">
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-2">Nama Produk</label>
+                <input 
+                  type="text" 
+                  value={productName}
+                  onChange={e => setProductName(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                  placeholder="Contoh: Serum Wajah Glowing"
+                />
+              </div>
+              
+              <div>
+                <div className="flex justify-between items-end mb-2">
+                  <label className="block text-sm font-medium text-zinc-400">Detail & Keunggulan Produk</label>
+                  <button 
+                    onClick={async () => {
+                      if (!productImageData) {
+                        setError("Unggah foto produk di langkah sebelumnya untuk menggunakan fitur ini.");
+                        return;
+                      }
+                      setIsGeneratingProductDetails(true);
+                      try {
+                        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+                        const response = await ai.models.generateContent({
+                          model: 'gemini-3.1-flash-preview',
+                          contents: {
+                            parts: [
+                              { inlineData: { data: getBase64(productImageData), mimeType: getMimeType(productImageData) } },
+                              { text: "Analisis gambar produk ini dan buatkan deskripsi singkat serta 3-4 keunggulan utamanya dalam bahasa Indonesia yang menarik untuk materi iklan." }
+                            ]
+                          }
+                        });
+                        setProductDetails(response.text || "");
+                      } catch (err) {
+                        console.error(err);
+                      } finally {
+                        setIsGeneratingProductDetails(false);
+                      }
+                    }}
+                    disabled={isGeneratingProductDetails || !productImageData}
+                    className="text-xs flex items-center gap-1 text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+                  >
+                    {isGeneratingProductDetails ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                    Auto-Generate dari Foto
+                  </button>
                 </div>
-              ) : (
-                <div className="space-y-8 flex-1">
+                <textarea 
+                  value={productDetails}
+                  onChange={e => setProductDetails(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none"
+                  placeholder="Contoh: Mengandung Vitamin C, mencerahkan dalam 7 hari, tekstur ringan tidak lengket..."
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-2">Latar Belakang Video</label>
+                <select 
+                  value={backgroundScene}
+                  onChange={e => setBackgroundScene(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors appearance-none"
+                >
+                  {BACKGROUND_OPTIONS.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-400 mb-2">Jumlah Segmen Video</label>
+                <div className="flex gap-2">
+                  {[1, 2, 3].map(num => (
+                    <button 
+                      key={num}
+                      onClick={() => setNumSegments(num)}
+                      className={`flex-1 py-3 rounded-xl font-medium border transition-colors ${numSegments === num ? (contentMode === 'ugc' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-blue-500/20 border-blue-500 text-blue-400') : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
+                    >
+                      {num} Segmen
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-between pt-4 max-w-2xl mx-auto">
+              <button onClick={() => setCurrentStep(1)} className="px-6 py-3 text-zinc-400 hover:text-white font-medium transition-colors">
+                Kembali
+              </button>
+              <button 
+                onClick={handleNextStep} 
+                className={`px-8 py-3 text-white font-medium rounded-xl transition-colors flex items-center gap-2 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}
+              >
+                Generate Storyboard <Sparkles className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3: Output */}
+        {currentStep === 3 && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {isGeneratingStoryboard ? (
+              <div className="flex flex-col items-center justify-center py-20">
+                <Loader2 className={`w-12 h-12 animate-spin mb-4 ${contentMode === 'ugc' ? 'text-emerald-500' : 'text-blue-500'}`} />
+                <h3 className="text-xl font-medium">Merancang Storyboard...</h3>
+                <p className="text-zinc-400 mt-2">AI sedang menyusun adegan dan script untuk video Anda.</p>
+              </div>
+            ) : scenes.length > 0 ? (
+              <>
+                <div className="flex justify-between items-center mb-8">
+                  <div>
+                    <h2 className="text-2xl font-bold mb-1">Hasil Storyboard</h2>
+                    <p className="text-zinc-400">Periksa adegan dan script, lalu generate gambar visualnya.</p>
+                  </div>
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={() => { setCurrentStep(2); setScenes([]); }}
+                      className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl text-sm font-medium transition-colors"
+                    >
+                      Edit Detail
+                    </button>
+                    <button 
+                      onClick={generateAllImages}
+                      disabled={isGeneratingImages || scenes.some(s => s.status === 'generating_images' || s.status === 'images_done')}
+                      className={`px-6 py-2 text-white font-medium rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}
+                    >
+                      {isGeneratingImages ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
+                      Generate Semua Gambar
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-8">
                   {scenes.map((scene, index) => (
-                    <div key={scene.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-5">
-                      <div className="flex items-start justify-between mb-4">
-                        <h3 className="font-semibold text-lg text-white">Segmen {index + 1}: {scene.title}</h3>
+                    <div key={scene.id} className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-xl">
+                      <div className="bg-zinc-950/50 px-6 py-4 border-b border-zinc-800 flex justify-between items-center">
+                        <h3 className="font-bold text-lg flex items-center gap-2">
+                          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${contentMode === 'ugc' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-500/20 text-blue-400'}`}>{index + 1}</span>
+                          {scene.title}
+                        </h3>
+                        {scene.status === 'error' && <span className="text-red-400 text-sm flex items-center gap-1"><AlertCircle className="w-4 h-4" /> Error</span>}
                       </div>
                       
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                        {/* Start Frame */}
-                        <div className="space-y-2">
-                          <p className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Frame Awal</p>
-                          <div className="aspect-[9/16] bg-zinc-900 rounded-lg overflow-hidden relative border border-zinc-800 flex items-center justify-center">
-                            {scene.status === 'generating_images' ? (
-                              <Loader2 className="w-6 h-6 animate-spin text-emerald-500" />
-                            ) : scene.startImageUrl ? (
-                              <img src={scene.startImageUrl} alt="Start Frame" className="w-full h-full object-cover" />
-                            ) : (
-                              <ImageIcon className="w-6 h-6 text-zinc-700" />
-                            )}
-                          </div>
-                          <p className="text-xs text-zinc-400 italic">"{scene.startVisualPrompt}"</p>
-                        </div>
-                        
-                        {/* End Frame */}
-                        <div className="space-y-2">
-                          <p className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Frame Akhir</p>
-                          <div className="aspect-[9/16] bg-zinc-900 rounded-lg overflow-hidden relative border border-zinc-800 flex items-center justify-center">
-                            {scene.status === 'generating_images' ? (
-                              <Loader2 className="w-6 h-6 animate-spin text-emerald-500" />
-                            ) : scene.endImageUrl ? (
-                              <img src={scene.endImageUrl} alt="End Frame" className="w-full h-full object-cover" />
-                            ) : (
-                              <ImageIcon className="w-6 h-6 text-zinc-700" />
-                            )}
-                          </div>
-                          <p className="text-xs text-zinc-400 italic">"{scene.endVisualPrompt}"</p>
-                        </div>
-                      </div>
-
-                      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mb-6">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-2">
-                            <FileText className="w-4 h-4 text-emerald-400" />
-                            <p className="text-xs font-medium text-zinc-300 uppercase tracking-wider">Voiceover Script</p>
-                          </div>
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <span className="text-xs text-zinc-400 font-medium">VOICE OVER {scene.useVoiceOver !== false ? 'ON' : 'OFF'}</span>
-                            <div className={`w-10 h-5 rounded-full transition-colors relative ${scene.useVoiceOver !== false ? 'bg-emerald-500' : 'bg-zinc-700'}`}>
-                              <div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-transform ${scene.useVoiceOver !== false ? 'left-6' : 'left-1'}`} />
-                            </div>
-                            <input 
-                              type="checkbox" 
-                              className="hidden" 
-                              checked={scene.useVoiceOver !== false} 
-                              onChange={() => {
-                                const newScenes = [...scenes];
-                                newScenes[index].useVoiceOver = scene.useVoiceOver === false ? true : false;
-                                setScenes(newScenes);
-                              }} 
-                            />
-                          </label>
-                        </div>
-                        <textarea 
-                          value={scene.script}
-                          onChange={(e) => {
-                            const newScenes = [...scenes];
-                            newScenes[index].script = e.target.value;
-                            setScenes(newScenes);
-                          }}
-                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-300 focus:outline-none focus:border-emerald-500/50 resize-none h-24"
-                        />
-                        
-                        <button 
-                          onClick={() => {
-                            const prompt = `PROMPT: CAMERA: Handheld iPhone front camera, slight natural shake, candid framing. DETAILS: Photorealistic high-fidelity video generation. Maintain strict consistency with the provided image reference. CONTEXT: ${scene.useVoiceOver !== false ? `LIP-SYNC: Model is speaking, mouth moving precisely to dialogue: '${scene.script}'. ` : ''}ACTION: ${scene.startVisualPrompt} Transitioning to: ${scene.endVisualPrompt}. ENVIRONMENT: ${backgroundScene}. NEGATIVE: distortion, morphing, bad hands, text overlays.`;
-                            navigator.clipboard.writeText(prompt);
-                          }}
-                          className="w-full mt-3 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
-                        >
-                          <Copy className="w-4 h-4" /> Copy Video Prompt
-                        </button>
-                      </div>
-
-                      {/* Video Generation Section */}
-                      <div className="border-t border-zinc-800 pt-6">
-                        {scene.videoUrl ? (
+                      <div className="p-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                          {/* Start Frame */}
                           <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <p className="text-sm font-medium text-emerald-400 flex items-center gap-2"><Sparkles className="w-4 h-4"/> Video Berhasil Dibuat</p>
-                              <a href={scene.videoUrl} download={`segmen-${index + 1}.mp4`} className="text-xs bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 transition-colors">
-                                <Download className="w-3 h-3" /> Download MP4
-                              </a>
+                            <div className="flex justify-between items-center">
+                              <h4 className="text-sm font-medium text-zinc-400">Frame Awal</h4>
                             </div>
-                            <video src={scene.videoUrl} controls autoPlay loop className="w-full rounded-lg aspect-[9/16] bg-black border border-zinc-800" />
-                          </div>
-                        ) : (
-                          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-                            <div className="text-xs text-zinc-500 flex items-center gap-2">
-                              <AlertCircle className="w-4 h-4" /> Membutuhkan akses Pro (API Key)
-                            </div>
-                            <button
-                              onClick={() => handleGenerateVideoClick(index)}
-                              disabled={scene.status !== 'images_done'}
-                              className="w-full sm:w-auto py-2.5 px-6 bg-zinc-100 hover:bg-white text-zinc-900 font-semibold rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
-                            >
-                              {scene.status === 'generating_video' ? (
-                                <><Loader2 className="w-4 h-4 animate-spin" /> {scene.videoProgress}</>
+                            <div className="aspect-[9/16] bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden relative group">
+                              {scene.startImageUrl ? (
+                                <img src={scene.startImageUrl} alt="Start Frame" className="w-full h-full object-cover" />
                               ) : (
-                                <><Video className="w-4 h-4" /> Generate Video (Veo 3.1)</>
+                                <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-600 p-6 text-center">
+                                  {scene.status === 'generating_images' ? (
+                                    <>
+                                      <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                                      <span className="text-sm">Generating...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <ImageIcon className="w-8 h-8 mb-2 opacity-50" />
+                                      <span className="text-xs">Menunggu generate gambar</span>
+                                    </>
+                                  )}
+                                </div>
                               )}
-                            </button>
+                            </div>
+                            <p className="text-xs text-zinc-500 bg-zinc-950 p-3 rounded-lg border border-zinc-800/50">{scene.startVisualPrompt}</p>
                           </div>
-                        )}
-                        {scene.error && <p className="mt-3 text-xs text-red-400">{scene.error}</p>}
+
+                          {/* End Frame */}
+                          <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                              <h4 className="text-sm font-medium text-zinc-400">Frame Akhir</h4>
+                            </div>
+                            <div className="aspect-[9/16] bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden relative group">
+                              {scene.endImageUrl ? (
+                                <img src={scene.endImageUrl} alt="End Frame" className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-600 p-6 text-center">
+                                  {scene.status === 'generating_images' ? (
+                                    <>
+                                      <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                                      <span className="text-sm">Generating...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <ImageIcon className="w-8 h-8 mb-2 opacity-50" />
+                                      <span className="text-xs">Menunggu generate gambar</span>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <p className="text-xs text-zinc-500 bg-zinc-950 p-3 rounded-lg border border-zinc-800/50">{scene.endVisualPrompt}</p>
+                          </div>
+                        </div>
+
+                        {/* Script & Video Actions */}
+                        <div className="bg-zinc-950 rounded-xl border border-zinc-800 p-5">
+                          <h4 className="text-sm font-medium text-zinc-400 mb-2 flex items-center gap-2">
+                            <FileText className="w-4 h-4" /> Voiceover Script
+                          </h4>
+                          <p className="text-lg font-medium text-white mb-6">"{scene.script}"</p>
+                          
+                          <div className="flex flex-wrap gap-3 pt-4 border-t border-zinc-800">
+                            <button 
+                              onClick={() => copyVideoPrompt(scene)}
+                              disabled={!scene.startImageUrl || !scene.endImageUrl}
+                              className="flex-1 sm:flex-none px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                            >
+                              <Copy className="w-4 h-4" /> Copy Video Prompt
+                            </button>
+                            
+                            {scene.videoUrl ? (
+                              <a 
+                                href={scene.videoUrl} 
+                                download={`segment-${index + 1}.mp4`}
+                                className={`flex-1 sm:flex-none px-4 py-2 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}
+                              >
+                                <Download className="w-4 h-4" /> Download Video
+                              </a>
+                            ) : (
+                              <button 
+                                onClick={() => handleGenerateVideo(index)}
+                                disabled={scene.status === 'generating_video' || !scene.startImageUrl || !scene.endImageUrl}
+                                className={`flex-1 sm:flex-none px-4 py-2 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}
+                              >
+                                {scene.status === 'generating_video' ? (
+                                  <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+                                ) : (
+                                  <><Video className="w-4 h-4" /> Generate Video (Veo 3.1)</>
+                                )}
+                              </button>
+                            )}
+                          </div>
+                          {scene.videoProgress && (
+                            <p className="text-xs text-emerald-400 mt-3 flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" /> {scene.videoProgress}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))}
                 </div>
-              )}
-
-              {scenes.length > 0 && (
-                <div className="mt-8 pt-8 border-t border-zinc-800 space-y-4">
-                  <button 
-                    onClick={handleDownloadAllAssets}
-                    className="w-full py-4 bg-white hover:bg-zinc-100 text-zinc-900 font-bold rounded-xl transition-colors flex items-center justify-center gap-2 shadow-lg"
-                  >
-                    <Download className="w-5 h-5" /> DOWNLOAD ALL ASSETS
-                  </button>
-                  
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-                    <div className="bg-indigo-600/10 border-b border-zinc-800 p-4 flex items-center justify-center gap-2">
-                      <Video className="w-5 h-5 text-indigo-400" />
-                      <h3 className="text-indigo-400 font-semibold uppercase tracking-wider text-sm">Akses Video Generator External</h3>
-                    </div>
-                    <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <a 
-                        href="https://labs.google/fx/id/tools/flow" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="py-3 bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-medium rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
-                      >
-                        Flow AI
-                      </a>
-                      <a 
-                        href="https://grok.com/" 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="py-3 bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 font-medium rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
-                      >
-                        Grok AI
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-            </div>
+              </>
+            ) : null}
           </div>
-
-        </div>
+        )}
       </main>
 
       {/* Tutorial Modal */}
@@ -720,14 +943,14 @@ function AppContent() {
       {videoWarningSceneIndex !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
-            <div className="flex items-center gap-3 mb-4 text-amber-400">
+            <div className="flex items-center gap-3 text-amber-500 mb-4">
               <AlertCircle className="w-6 h-6" />
-              <h2 className="text-lg font-bold text-white">Perhatian: Fitur Berbayar</h2>
+              <h2 className="text-xl font-bold text-white">Fitur Pro Dibutuhkan</h2>
             </div>
             
             <div className="space-y-4 text-zinc-300 text-sm mb-8">
-              <p>Fitur <strong>Generate Video (Veo 3.1)</strong> membutuhkan Google Gemini API Key yang memiliki akses penagihan (billing) aktif.</p>
-              <p>Jika Anda pengguna gratis, Anda bisa menggunakan <strong>Opsi Manual</strong> dengan mengunduh gambar dan menyalin prompt ke <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Google AI Studio</a>.</p>
+              <p>Pembuatan video dengan Veo 3.1 membutuhkan akses API berbayar.</p>
+              <p>Anda dapat mengaktifkan mode Pro dengan memasukkan API Key Google Gemini Anda sendiri yang memiliki akses penagihan (billing) aktif.</p>
             </div>
             
             <div className="flex flex-col sm:flex-row gap-3 justify-end">
@@ -740,34 +963,24 @@ function AppContent() {
               <button 
                 onClick={() => {
                   setVideoWarningSceneIndex(null);
-                  setShowTutorialModal(true);
+                  handleQualityChange('pro');
                 }} 
-                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium rounded-xl transition-colors"
-              >
-                Lihat Cara Manual
-              </button>
-              <button 
-                onClick={handleConfirmGenerateVideo} 
                 className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-medium rounded-xl transition-colors shadow-lg shadow-emerald-500/20"
               >
-                Masukkan API Key
+                Aktifkan Mode Pro
               </button>
             </div>
           </div>
         </div>
       )}
+
       {/* Pro Warning Modal */}
       {showProWarning && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center gap-3 text-amber-400">
-                <AlertCircle className="w-6 h-6" />
-                <h2 className="text-lg font-bold text-white">Perhatian: Fitur Berbayar</h2>
-              </div>
-              <button onClick={() => setShowProWarning(false)} className="text-zinc-400 hover:text-white transition-colors">
-                <X className="w-5 h-5" />
-              </button>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <div className="flex items-center gap-3 text-emerald-500 mb-4">
+              <Sparkles className="w-6 h-6" />
+              <h2 className="text-xl font-bold text-white">Aktifkan Mode Pro</h2>
             </div>
             
             <div className="space-y-4 text-zinc-300 text-sm mb-8">
