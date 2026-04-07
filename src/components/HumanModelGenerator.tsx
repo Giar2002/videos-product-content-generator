@@ -1,249 +1,238 @@
 import React, { useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { Loader2, UserPlus, Wand2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, Wand2, AlertCircle, Sparkles } from 'lucide-react';
 
-interface HumanModelGeneratorProps {
-  onModelGenerated: (imageData: string) => void;
+interface Props {
+  onModelGenerated: (dataUrl: string) => void;
   aiQuality: 'free' | 'pro';
   hasKey: boolean;
 }
 
-const GENDERS = ['Wanita', 'Pria', 'Androgini'];
-const AGES = ['Remaja (18-22)', 'Dewasa Muda (23-30)', 'Dewasa (31-40)', 'Paruh Baya (41-55)', 'Senior (55+)'];
-const ETHNICITIES = ['Asia Tenggara', 'Asia Timur', 'Kaukasia', 'Hispanik', 'Afrika', 'Timur Tengah', 'Campuran'];
-const HAIR_STYLES = {
-  'Wanita': ['Panjang Lurus', 'Panjang Bergelombang', 'Bob Pendek', 'Pixie Cut', 'Diikat (Ponytail)', 'Cepol (Bun)', 'Berhijab'],
-  'Pria': ['Pendek Rapi', 'Undercut', 'Gondrong', 'Cepak (Buzz Cut)', 'Keriting/Ikal', 'Botak'],
-  'Androgini': ['Pendek Rapi', 'Bob Pendek', 'Gondrong', 'Pixie Cut']
-};
-const HAIR_COLORS = ['Hitam', 'Cokelat Gelap', 'Cokelat Terang', 'Blonde', 'Merah/Auburn', 'Abu-abu/Silver', 'Warna Cerah (Pink/Biru/dll)'];
-const EYE_COLORS = ['Cokelat Gelap', 'Cokelat Terang', 'Hitam', 'Biru', 'Hijau', 'Abu-abu'];
-const SKIN_TONES = ['Sangat Terang (Fair)', 'Terang (Light)', 'Kuning Langsat (Medium)', 'Sawo Matang (Tan)', 'Gelap (Dark)', 'Sangat Gelap (Deep)'];
-const BODY_TYPES = ['Ramping (Slim)', 'Atletis (Athletic)', 'Rata-rata (Average)', 'Berisi (Curvy)', 'Kekar (Muscular)'];
-const STYLES = ['Kasual Sehari-hari', 'Smart Casual', 'Formal/Kantoran', 'Streetwear', 'Sporty/Activewear', 'Elegan/Glamor', 'Bohemian'];
-const ACCESSORIES = ['Tanpa Aksesoris', 'Kacamata Baca', 'Kacamata Hitam', 'Topi', 'Anting Minimalis', 'Kalung Minimalis', 'Jam Tangan'];
-
-export function HumanModelGenerator({ onModelGenerated, aiQuality, hasKey }: HumanModelGeneratorProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+export function HumanModelGenerator({ onModelGenerated, aiQuality, hasKey }: Props) {
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isAutoGenerating, setIsAutoGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [gender, setGender] = useState(GENDERS[0]);
-  const [age, setAge] = useState(AGES[1]);
-  const [ethnicity, setEthnicity] = useState(ETHNICITIES[0]);
-  const [hairStyle, setHairStyle] = useState(HAIR_STYLES[GENDERS[0] as keyof typeof HAIR_STYLES][0]);
-  const [hairColor, setHairColor] = useState(HAIR_COLORS[0]);
-  const [eyeColor, setEyeColor] = useState(EYE_COLORS[0]);
-  const [skinTone, setSkinTone] = useState(SKIN_TONES[2]);
-  const [bodyType, setBodyType] = useState(BODY_TYPES[2]);
-  const [style, setStyle] = useState(STYLES[0]);
-  const [accessories, setAccessories] = useState(ACCESSORIES[0]);
-  const [additionalDetails, setAdditionalDetails] = useState("");
+  const [gender, setGender] = useState<'Wanita' | 'Pria' | 'Androgini'>('Wanita');
+  const [age, setAge] = useState('20-an');
+  const [ethnicity, setEthnicity] = useState('Asia Tenggara (Indonesia)');
+  const [skinTone, setSkinTone] = useState('Kuning Langsat');
+  const [bodyType, setBodyType] = useState('Proporsional/Biasa');
+  const [hairColor, setHairColor] = useState('Hitam');
+  const [hairStyle, setHairStyle] = useState('Panjang Lurus');
+  const [eyeColor, setEyeColor] = useState('Cokelat Gelap');
+  const [clothing, setClothing] = useState('Kasual (Kaos/Jeans)');
+  const [customPrompt, setCustomPrompt] = useState('');
 
-  const handleGenderChange = (newGender: string) => {
+  const hairOptions = {
+    'Wanita': ['Panjang Lurus', 'Sebahu', 'Bob Pendek', 'Ikal/Keriting', 'Diikat (Ponytail)', 'Berhijab', 'Cepak'],
+    'Pria': ['Pendek Rapi', 'Cepak (Buzz Cut)', 'Gondrong', 'Ikal/Keriting', 'Botak', 'Undercut', 'Pompadour'],
+    'Androgini': ['Mullet', 'Pixie Cut', 'Sebahu Berantakan', 'Shaggy', 'Botak', 'Gondrong']
+  };
+
+  const handleGenderChange = (newGender: 'Wanita' | 'Pria' | 'Androgini') => {
     setGender(newGender);
-    setHairStyle(HAIR_STYLES[newGender as keyof typeof HAIR_STYLES][0]);
+    setHairStyle(hairOptions[newGender][0]);
   };
 
-  const constructPrompt = () => {
-    return `A highly realistic, professional portrait photograph of a ${age.split(' ')[0].toLowerCase()} ${ethnicity.toLowerCase()} ${gender.toLowerCase()} model. 
-    Physical features: ${skinTone.split(' (')[1].replace(')', '')} skin tone, ${bodyType.split(' (')[1].replace(')', '')} build, ${eyeColor.toLowerCase()} eyes. 
-    Hair: ${hairColor.toLowerCase()} ${hairStyle.toLowerCase()} hair. 
-    Attire and style: Wearing ${style.toLowerCase()} clothing. 
-    Accessories: ${accessories === 'Tanpa Aksesoris' ? 'No accessories, bare' : accessories.toLowerCase()}.
-    ${additionalDetails ? `Additional details: ${additionalDetails}.` : ''} 
-    The lighting should be studio quality, soft and flattering. The background should be clean and neutral, suitable for product endorsement. 8k resolution, highly detailed face, photorealistic.`;
-  };
-
-  const handleGenerate = async (promptToUse: string) => {
+  const handleGenerate = async () => {
     setIsGenerating(true);
     setError(null);
     try {
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-      const ai = new GoogleGenAI({ apiKey });
-      const modelName = aiQuality === 'pro' && hasKey ? 'gemini-3.1-flash-image-preview' : 'gemini-2.5-flash-image';
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const modelName = aiQuality === 'pro' ? 'gemini-3.1-flash-image-preview' : 'gemini-2.5-flash-image';
+      
+      const genderMap: Record<string, string> = { 'Wanita': 'woman', 'Pria': 'man', 'Androgini': 'androgynous person' };
+      const ageMap: Record<string, string> = { 'Remaja (Belasan)': 'teenager', '20-an': 'in their 20s', '30-an': 'in their 30s', '40-an': 'in their 40s', 'Paruh Baya (50-an)': 'in their 50s', 'Senior (60+)': 'senior in their 60s' };
+      const ethMap: Record<string, string> = { 'Asia Tenggara (Indonesia)': 'Southeast Asian/Indonesian', 'Asia Timur (Korea/Jepang)': 'East Asian', 'Asia Selatan (India)': 'South Asian', 'Kaukasia (Bule)': 'Caucasian', 'Timur Tengah': 'Middle Eastern', 'Afrika': 'African', 'Hispanik/Latin': 'Hispanic/Latino' };
+      const skinMap: Record<string, string> = { 'Sangat Terang (Fair)': 'fair skin', 'Kuning Langsat': 'light olive skin', 'Sawo Matang': 'tan/brown skin', 'Cokelat Gelap': 'dark brown skin', 'Hitam': 'dark skin' };
+      const bodyMap: Record<string, string> = { 'Kurus/Ramping': 'slim body', 'Atletis/Berotot': 'athletic body', 'Proporsional/Biasa': 'average body', 'Curvy/Berisi': 'curvy body', 'Plus Size': 'plus size body' };
+      const hairColorMap: Record<string, string> = { 'Hitam': 'black', 'Cokelat Gelap': 'dark brown', 'Cokelat Terang': 'light brown', 'Pirang (Blonde)': 'blonde', 'Merah': 'red', 'Abu-abu/Putih': 'grey/white', 'Warna-warni (Neon/Pastel)': 'colorful dyed' };
+      const eyeMap: Record<string, string> = { 'Cokelat Gelap': 'dark brown', 'Cokelat Terang': 'light brown', 'Hitam': 'black', 'Biru': 'blue', 'Hijau': 'green', 'Abu-abu': 'grey' };
+      const clothMap: Record<string, string> = { 'Kasual (Kaos/Jeans)': 'casual t-shirt and jeans', 'Formal (Jas/Blazer)': 'formal suit or blazer', 'Streetwear/Hypebeast': 'streetwear fashion', 'Pakaian Olahraga (Activewear)': 'activewear/sportswear', 'Vintage/Retro': 'vintage/retro fashion', 'Pakaian Musim Dingin': 'winter clothing', 'Pakaian Tradisional/Etnik': 'traditional ethnic clothing' };
+
+      const genderEn = genderMap[gender];
+      const ageEn = ageMap[age];
+      const ethEn = ethMap[ethnicity];
+      const skinEn = skinMap[skinTone];
+      const bodyEn = bodyMap[bodyType];
+      const hairColEn = hairColorMap[hairColor];
+      const eyeEn = eyeMap[eyeColor];
+      const clothEn = clothMap[clothing];
+
+      let hairEn = hairStyle.toLowerCase();
+      if (hairStyle === 'Berhijab') hairEn = 'wearing a stylish hijab';
+      else if (hairStyle === 'Diikat (Ponytail)') hairEn = 'hair tied in a ponytail';
+      else if (hairStyle === 'Cepak (Buzz Cut)') hairEn = 'buzz cut hair';
+      else if (hairStyle === 'Pendek Rapi') hairEn = 'short neat hair';
+      else if (hairStyle === 'Panjang Lurus') hairEn = 'long straight hair';
+      else if (hairStyle === 'Ikal/Keriting') hairEn = 'curly hair';
+      else if (hairStyle === 'Sebahu Berantakan') hairEn = 'messy shoulder-length hair';
+
+      const hairDesc = hairStyle === 'Berhijab' ? hairEn : `${hairColEn} ${hairEn}`;
+
+      let prompt = `Photorealistic portrait of a ${ethEn} ${genderEn} ${ageEn}, with ${skinEn} and ${bodyEn}. They have ${eyeEn} eyes and ${hairDesc}. Wearing ${clothEn}. Looking directly at the camera with a friendly, natural expression. Studio lighting, high quality, 8k resolution, highly detailed face, neutral background.`;
+
+      if (customPrompt.trim()) {
+        prompt += ` Additional details: ${customPrompt.trim()}`;
+      }
+
       const response = await ai.models.generateContent({
         model: modelName,
-        contents: promptToUse,
-        config: { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } }
+        contents: prompt,
+        config: aiQuality === 'pro' ? { imageConfig: { aspectRatio: "1:1", imageSize: "1K" } } : undefined
       });
-      
-      let foundImage = false;
+
+      let base64Image = "";
       for (const part of response.candidates?.[0]?.content?.parts || []) {
         if (part.inlineData) {
-          onModelGenerated(`data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`);
-          foundImage = true;
+          base64Image = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
           break;
         }
       }
-      if (!foundImage) throw new Error("No image generated");
-      setIsExpanded(false); // Close panel on success
+
+      if (base64Image) {
+        onModelGenerated(base64Image);
+      } else {
+        throw new Error("Gagal menghasilkan gambar.");
+      }
     } catch (err: any) {
-      setError(err.message || "Gagal membuat model.");
+      setError(err.message || "Terjadi kesalahan saat men-generate model.");
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const handleAutoGenerate = async () => {
-    setIsAutoGenerating(true);
-    setError(null);
-    try {
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-      const ai = new GoogleGenAI({ apiKey });
-      // Always use a good text model for prompt generation, regardless of free/pro
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `Create a highly detailed, creative, and realistic visual prompt for an AI image generator to create a human model for product endorsement. 
-        Do not include any introductory or concluding text, just the prompt itself.
-        The prompt must describe: age, gender, ethnicity, specific facial features, skin texture, hair style and color, eye color, body type, clothing style, lighting (e.g., soft studio lighting, golden hour), and camera details (e.g., 85mm lens, shallow depth of field, 8k resolution, photorealistic).
-        Make it sound like a professional photography prompt.`
-      });
-      
-      const generatedPrompt = response.text || "";
-      if (generatedPrompt) {
-        setAdditionalDetails(generatedPrompt);
-        await handleGenerate(generatedPrompt);
-      } else {
-        throw new Error("Gagal menghasilkan prompt otomatis.");
-      }
-    } catch (err: any) {
-      setError(err.message || "Gagal auto-generate model.");
-    } finally {
-      setIsAutoGenerating(false);
-    }
-  };
-
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-      <div 
-        className="p-5 flex items-center justify-between cursor-pointer hover:bg-zinc-800/50 transition-colors"
-        onClick={() => setIsExpanded(!isExpanded)}
-      >
+    <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-5 space-y-4">
+      <div className="flex items-center gap-2 mb-2">
+        <Wand2 className="w-5 h-5 text-emerald-500" />
+        <h4 className="font-medium text-white">AI Model Generator</h4>
+      </div>
+      
+      <div className="grid grid-cols-2 gap-4">
         <div>
-          <h2 className="text-lg font-medium flex items-center gap-2 text-white">
-            <UserPlus className="w-5 h-5 text-emerald-400" />
-            Buat Karakter Model AI
-          </h2>
-          <p className="text-xs text-zinc-400 mt-1">Buat model virtual Anda sendiri dengan detail spesifik.</p>
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Gender</label>
+          <select value={gender} onChange={e => handleGenderChange(e.target.value as any)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            <option value="Wanita">Wanita</option>
+            <option value="Pria">Pria</option>
+            <option value="Androgini">Androgini</option>
+          </select>
         </div>
-        {isExpanded ? <ChevronUp className="w-5 h-5 text-zinc-500" /> : <ChevronDown className="w-5 h-5 text-zinc-500" />}
+        <div>
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Usia</label>
+          <select value={age} onChange={e => setAge(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            <option value="Remaja (Belasan)">Remaja (Belasan)</option>
+            <option value="20-an">20-an</option>
+            <option value="30-an">30-an</option>
+            <option value="40-an">40-an</option>
+            <option value="Paruh Baya (50-an)">Paruh Baya (50-an)</option>
+            <option value="Senior (60+)">Senior (60+)</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Etnis/Ras</label>
+          <select value={ethnicity} onChange={e => setEthnicity(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            <option value="Asia Tenggara (Indonesia)">Asia Tenggara (Indonesia)</option>
+            <option value="Asia Timur (Korea/Jepang)">Asia Timur (Korea/Jepang)</option>
+            <option value="Asia Selatan (India)">Asia Selatan (India)</option>
+            <option value="Kaukasia (Bule)">Kaukasia (Bule)</option>
+            <option value="Timur Tengah">Timur Tengah</option>
+            <option value="Afrika">Afrika</option>
+            <option value="Hispanik/Latin">Hispanik/Latin</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Warna Kulit</label>
+          <select value={skinTone} onChange={e => setSkinTone(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            <option value="Sangat Terang (Fair)">Sangat Terang (Fair)</option>
+            <option value="Kuning Langsat">Kuning Langsat</option>
+            <option value="Sawo Matang">Sawo Matang</option>
+            <option value="Cokelat Gelap">Cokelat Gelap</option>
+            <option value="Hitam">Hitam</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Tipe Tubuh</label>
+          <select value={bodyType} onChange={e => setBodyType(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            <option value="Kurus/Ramping">Kurus/Ramping</option>
+            <option value="Atletis/Berotot">Atletis/Berotot</option>
+            <option value="Proporsional/Biasa">Proporsional/Biasa</option>
+            <option value="Curvy/Berisi">Curvy/Berisi</option>
+            <option value="Plus Size">Plus Size</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Warna Mata</label>
+          <select value={eyeColor} onChange={e => setEyeColor(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            <option value="Cokelat Gelap">Cokelat Gelap</option>
+            <option value="Cokelat Terang">Cokelat Terang</option>
+            <option value="Hitam">Hitam</option>
+            <option value="Biru">Biru</option>
+            <option value="Hijau">Hijau</option>
+            <option value="Abu-abu">Abu-abu</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Gaya Rambut</label>
+          <select value={hairStyle} onChange={e => setHairStyle(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            {hairOptions[gender].map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Warna Rambut</label>
+          <select value={hairColor} onChange={e => setHairColor(e.target.value)} disabled={hairStyle === 'Berhijab' || hairStyle === 'Botak'} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 disabled:opacity-50">
+            <option value="Hitam">Hitam</option>
+            <option value="Cokelat Gelap">Cokelat Gelap</option>
+            <option value="Cokelat Terang">Cokelat Terang</option>
+            <option value="Pirang (Blonde)">Pirang (Blonde)</option>
+            <option value="Merah">Merah</option>
+            <option value="Abu-abu/Putih">Abu-abu/Putih</option>
+            <option value="Warna-warni (Neon/Pastel)">Warna-warni (Neon/Pastel)</option>
+          </select>
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Gaya Pakaian / Vibe</label>
+          <select value={clothing} onChange={e => setClothing(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500">
+            <option value="Kasual (Kaos/Jeans)">Kasual (Kaos/Jeans)</option>
+            <option value="Formal (Jas/Blazer)">Formal (Jas/Blazer)</option>
+            <option value="Streetwear/Hypebeast">Streetwear/Hypebeast</option>
+            <option value="Pakaian Olahraga (Activewear)">Pakaian Olahraga (Activewear)</option>
+            <option value="Vintage/Retro">Vintage/Retro</option>
+            <option value="Pakaian Musim Dingin">Pakaian Musim Dingin</option>
+            <option value="Pakaian Tradisional/Etnik">Pakaian Tradisional/Etnik</option>
+          </select>
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-zinc-400 mb-1">Detail Tambahan (Opsional)</label>
+          <textarea 
+            value={customPrompt}
+            onChange={e => setCustomPrompt(e.target.value)}
+            placeholder="Ketik manual jika ada detail spesifik (misal: memakai kacamata bulat, ada tato di leher, dll)..."
+            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 resize-none h-16"
+          />
+        </div>
       </div>
 
-      {isExpanded && (
-        <div className="p-5 border-t border-zinc-800 space-y-6 bg-zinc-950/30">
-          
-          {/* Quick Auto Generate */}
-          <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div>
-              <h3 className="text-sm font-medium text-emerald-400 flex items-center gap-2">
-                <Wand2 className="w-4 h-4" /> Auto-Generate Model (Rekomendasi)
-              </h3>
-              <p className="text-xs text-zinc-400 mt-1">Biarkan AI membuatkan prompt model yang sangat detail dan realistis secara acak.</p>
-            </div>
-            <button
-              onClick={handleAutoGenerate}
-              disabled={isAutoGenerating || isGenerating}
-              className="w-full sm:w-auto py-2 px-4 bg-emerald-500 hover:bg-emerald-600 text-white font-medium rounded-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2 text-sm whitespace-nowrap"
-            >
-              {isAutoGenerating ? <><Loader2 className="w-4 h-4 animate-spin" /> Meracik Prompt...</> : "Auto-Generate"}
-            </button>
-          </div>
-
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center" aria-hidden="true">
-              <div className="w-full border-t border-zinc-800"></div>
-            </div>
-            <div className="relative flex justify-center">
-              <span className="px-3 bg-zinc-900 text-xs font-medium text-zinc-500 uppercase tracking-wider">ATAU BUAT MANUAL</span>
-            </div>
-          </div>
-
-          {/* Manual Controls */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Gender</label>
-              <select value={gender} onChange={(e) => handleGenderChange(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Usia</label>
-              <select value={age} onChange={(e) => setAge(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {AGES.map(a => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Etnis / Ras</label>
-              <select value={ethnicity} onChange={(e) => setEthnicity(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {ETHNICITIES.map(e => <option key={e} value={e}>{e}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Warna Kulit</label>
-              <select value={skinTone} onChange={(e) => setSkinTone(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {SKIN_TONES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Gaya Rambut</label>
-              <select value={hairStyle} onChange={(e) => setHairStyle(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {HAIR_STYLES[gender as keyof typeof HAIR_STYLES].map(h => <option key={h} value={h}>{h}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Warna Rambut</label>
-              <select value={hairColor} onChange={(e) => setHairColor(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {HAIR_COLORS.map(h => <option key={h} value={h}>{h}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Warna Mata</label>
-              <select value={eyeColor} onChange={(e) => setEyeColor(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {EYE_COLORS.map(e => <option key={e} value={e}>{e}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Tipe Tubuh</label>
-              <select value={bodyType} onChange={(e) => setBodyType(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {BODY_TYPES.map(b => <option key={b} value={b}>{b}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Aksesoris</label>
-              <select value={accessories} onChange={(e) => setAccessories(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {ACCESSORIES.map(a => <option key={a} value={a}>{a}</option>)}
-              </select>
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Gaya Pakaian / Vibe</label>
-              <select value={style} onChange={(e) => setStyle(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-emerald-500/50">
-                {STYLES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-zinc-400 mb-1.5">Detail Tambahan (Opsional)</label>
-              <textarea 
-                value={additionalDetails}
-                onChange={(e) => setAdditionalDetails(e.target.value)}
-                placeholder="Misal: Memakai kacamata, memiliki freckles, tersenyum lebar..."
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm h-16 resize-none focus:outline-none focus:border-emerald-500/50"
-              />
-            </div>
-          </div>
-
-          <button
-            onClick={() => handleGenerate(constructPrompt())}
-            disabled={isGenerating || isAutoGenerating}
-            className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-900 font-semibold rounded-xl transition-all disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
-          >
-            {isGenerating && !isAutoGenerating ? <><Loader2 className="w-4 h-4 animate-spin" /> Membuat Model...</> : "Generate Model Manual"}
-          </button>
-          
-          {error && <p className="text-xs text-red-400 text-center">{error}</p>}
+      {error && (
+        <div className="text-xs text-red-400 flex items-start gap-1">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
         </div>
       )}
+
+      <button
+        onClick={handleGenerate}
+        disabled={isGenerating}
+        className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 mt-2"
+      >
+        {isGenerating ? (
+          <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+        ) : (
+          <><Sparkles className="w-4 h-4" /> Generate Model</>
+        )}
+      </button>
     </div>
   );
 }

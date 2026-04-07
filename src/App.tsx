@@ -2,8 +2,11 @@ import React, { useState } from 'react';
 import { ApiKeyGate, useApiKey } from './components/ApiKeyGate';
 import { ImageUploader } from './components/ImageUploader';
 import { HumanModelGenerator } from './components/HumanModelGenerator';
+import { Dashboard } from './components/Dashboard';
+import { VideoEditor } from './components/VideoEditor';
+import { saveProject, ProjectData, ProjectBlobs } from './services/storage';
 import { GoogleGenAI, Type } from '@google/genai';
-import { Loader2, LayoutTemplate, Image as ImageIcon, FileText, Download, PlaySquare, Copy, Sparkles, UserPlus, Video, AlertCircle, X, Key, ArrowRight, RotateCcw, Hand, User, RefreshCw } from 'lucide-react';
+import { Loader2, LayoutTemplate, Image as ImageIcon, FileText, Download, PlaySquare, Copy, Sparkles, UserPlus, Video, AlertCircle, X, Key, ArrowRight, RotateCcw, Hand, User, RefreshCw, Save, AlertTriangle } from 'lucide-react';
 
 interface Scene {
   id: string;
@@ -15,6 +18,7 @@ interface Scene {
   endImageUrl?: string;
   videoUrl?: string;
   status: 'idle' | 'generating_images' | 'images_done' | 'generating_video' | 'video_done' | 'error';
+  generatingFrame?: 'start' | 'end' | 'both';
   error?: string;
   videoProgress?: string;
   useVoiceOver?: boolean;
@@ -50,16 +54,22 @@ function AppContent() {
   const { hasKey, requireKey } = useApiKey();
   const [aiQuality, setAiQuality] = useState<'free' | 'pro'>('free');
 
-  const [view, setView] = useState<'landing' | 'mode' | 'workspace'>('landing');
+  const [view, setView] = useState<'landing' | 'dashboard' | 'mode' | 'workspace' | 'editor'>('landing');
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
 
+  const [projectId, setProjectId] = useState<string | null>(null);
   const [modelImageData, setModelImageData] = useState<string | null>(null);
   const [productImageData, setProductImageData] = useState<string | null>(null);
   const [productName, setProductName] = useState("");
   const [productDetails, setProductDetails] = useState("");
+  const [backgroundType, setBackgroundType] = useState<'preset' | 'custom' | 'image'>('preset');
   const [backgroundScene, setBackgroundScene] = useState(BACKGROUND_OPTIONS[0]);
+  const [customBackground, setCustomBackground] = useState("");
+  const [backgroundImageData, setBackgroundImageData] = useState<string | null>(null);
   const [numSegments, setNumSegments] = useState(1);
   const [contentMode, setContentMode] = useState<'ugc' | 'pov'>('ugc');
+  const [audioStyle, setAudioStyle] = useState<'talking_head' | 'voiceover'>('talking_head');
+  const [videoConcept, setVideoConcept] = useState("");
 
   // POV Specific State
   const [handGender, setHandGender] = useState<'Pria' | 'Wanita'>('Wanita');
@@ -71,10 +81,17 @@ function AppContent() {
   const [isGeneratingImages, setIsGeneratingImages] = useState(false);
   const [isGeneratingProductDetails, setIsGeneratingProductDetails] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [alertMsg, setAlertMsg] = useState<{title: string, message: string, type: 'success' | 'error'} | null>(null);
   
   const [showTutorialModal, setShowTutorialModal] = useState(false);
   const [videoWarningSceneIndex, setVideoWarningSceneIndex] = useState<number | null>(null);
   const [showProWarning, setShowProWarning] = useState(false);
+  const [regenerateModal, setRegenerateModal] = useState<{
+    isOpen: boolean;
+    sceneIndex: number;
+    frameType: 'start' | 'end';
+    customPrompt: string;
+  }>({ isOpen: false, sceneIndex: 0, frameType: 'start', customPrompt: '' });
 
   const handleQualityChange = async (quality: 'free' | 'pro') => {
     if (quality === 'pro') {
@@ -91,6 +108,7 @@ function AppContent() {
   };
 
   const resetWorkspace = () => {
+    setProjectId(null);
     setModelImageData(null);
     setProductImageData(null);
     setProductName("");
@@ -100,21 +118,109 @@ function AppContent() {
     setView('mode');
   };
 
+  const handleSaveProject = async () => {
+    try {
+      const project = {
+        name: productName || "Proyek Baru",
+        productName,
+        productDetails,
+        backgroundScene,
+        contentMode
+      };
+      const blobs = {
+        productImageData,
+        modelImageData,
+        scenes
+      };
+      const id = await saveProject(project, blobs, projectId || undefined);
+      setProjectId(id);
+      setAlertMsg({
+        title: "Berhasil",
+        message: "Proyek berhasil disimpan ke Dashboard!",
+        type: 'success'
+      });
+    } catch (err) {
+      console.error("Gagal menyimpan proyek", err);
+      setAlertMsg({
+        title: "Gagal",
+        message: "Gagal menyimpan proyek. Pastikan Anda sudah login.",
+        type: 'error'
+      });
+    }
+  };
+
+  const handleOpenProject = (project: ProjectData, blobs: ProjectBlobs) => {
+    setProjectId(project.id);
+    setProductName(project.productName);
+    setProductDetails(project.productDetails);
+    setBackgroundScene(project.backgroundScene);
+    setContentMode(project.contentMode as 'ugc' | 'pov');
+    setProductImageData(blobs.productImageData);
+    setModelImageData(blobs.modelImageData);
+    setScenes(blobs.scenes);
+    setCurrentStep(3); // Go directly to workspace
+    setView('workspace');
+  };
+
+  const handleProductImageUpload = async (file: File | null, dataUrl: string | null) => {
+    setProductImageData(dataUrl);
+    if (dataUrl) {
+      setIsGeneratingProductDetails(true);
+      try {
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: {
+            parts: [
+              { inlineData: { data: getBase64(dataUrl), mimeType: getMimeType(dataUrl) } },
+              { text: "Analisis gambar produk ini. Berikan 1) Nama Produk yang singkat dan menarik, dan 2) Deskripsi singkat serta 3-4 keunggulan utamanya dalam bahasa Indonesia untuk materi iklan." }
+            ]
+          },
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                nama: { type: Type.STRING },
+                detail: { type: Type.STRING }
+              }
+            }
+          }
+        });
+        const result = JSON.parse(response.text || "{}");
+        if (result.nama) setProductName(result.nama);
+        if (result.detail) setProductDetails(result.detail);
+      } catch (err) {
+        console.error("Gagal auto-generate detail produk:", err);
+      } finally {
+        setIsGeneratingProductDetails(false);
+      }
+    }
+  };
+
   const handleNextStep = () => {
     if (currentStep === 1) {
-      if (contentMode === 'ugc' && !modelImageData) {
-        setError("Silakan unggah atau buat Foto Model terlebih dahulu.");
-        return;
-      }
       if (!productImageData) {
         setError("Silakan unggah Foto Produk.");
+        return;
+      }
+      if (!productName || !productDetails) {
+        setError("Silakan lengkapi Nama Produk dan Detail/Keunggulan Produk.");
         return;
       }
       setError(null);
       setCurrentStep(2);
     } else if (currentStep === 2) {
-      if (!productName || !productDetails) {
-        setError("Silakan lengkapi Nama Produk dan Detail/Keunggulan Produk.");
+      if (contentMode === 'ugc' && !modelImageData) {
+        setError("Silakan unggah atau buat Foto Model terlebih dahulu.");
+        return;
+      }
+      if (backgroundType === 'image' && !backgroundImageData) {
+        setError("Silakan unggah Gambar Latar Belakang terlebih dahulu.");
+        return;
+      }
+      if (backgroundType === 'custom' && !customBackground.trim()) {
+        setError("Silakan tuliskan deskripsi Latar Belakang terlebih dahulu.");
         return;
       }
       setError(null);
@@ -139,34 +245,58 @@ function AppContent() {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       
       const parts: any[] = [
+        { text: "Gambar 1: Foto Produk" },
         { inlineData: { data: getBase64(productImageData), mimeType: getMimeType(productImageData) } }
       ];
 
       let modeContext = "";
       if (contentMode === 'ugc') {
-        modeContext = "Ini adalah video UGC (User Generated Content) di mana seorang kreator berbicara langsung ke kamera dan mendemonstrasikan produk.";
+        const audioContext = audioStyle === 'talking_head' 
+          ? "Kreator berbicara langsung ke kamera (Talking Head). Pose harus natural sambil memegang/menunjukkan produk." 
+          : "Hanya suara latar (Voiceover). Kreator TIDAK berbicara ke kamera, melainkan melakukan demonstrasi produk, b-roll, atau berpose natural dengan produk.";
+        modeContext = `Ini adalah video UGC (User Generated Content) profesional. ${audioContext}`;
+        parts.push({ text: "Gambar 2: Foto Model/Kreator" });
+        parts.push({ inlineData: { data: getBase64(modelImageData!), mimeType: getMimeType(modelImageData!) } });
       } else {
-        modeContext = `Ini adalah video POV (Point of View) unboxing/review produk. Kamera mengambil sudut pandang orang pertama. Hanya tangan yang terlihat berinteraksi dengan produk. Karakteristik tangan: Gender ${handGender}, Warna Kulit ${handSkinTone}, Pakaian ${handClothing}. Wajah TIDAK BOLEH terlihat.`;
+        modeContext = `Ini adalah video POV (Point of View) unboxing/review produk. Kamera mengambil sudut pandang orang pertama. Hanya tangan yang terlihat berinteraksi dengan produk. Karakteristik tangan: Gender ${handGender}, Warna Kulit ${handSkinTone}, Pakaian ${handClothing}. Wajah TIDAK BOLEH terlihat. Audio selalu Voiceover.`;
       }
+
+      if (backgroundType === 'image' && backgroundImageData) {
+        parts.push({ text: "Gambar 3: Latar Belakang Video" });
+        parts.push({ inlineData: { data: getBase64(backgroundImageData), mimeType: getMimeType(backgroundImageData) } });
+      }
+
+      const bgText = backgroundType === 'image' ? 'Sesuai dengan Gambar 3 (Latar Belakang)' : (backgroundType === 'custom' ? customBackground : backgroundScene);
 
       parts.push({
         text: `Buat storyboard untuk video iklan TikTok/Reels sebanyak ${numSegments} segmen.
         Produk: ${productName}
         Detail: ${productDetails}
-        Latar Belakang: ${backgroundScene}
+        Latar Belakang: ${bgText}
         Konteks Mode: ${modeContext}
+        Arahan Konsep/Kamera: ${videoConcept || 'Buat variasi angle kamera dan pose yang natural dan profesional sesuai jenis produk.'}
+        
+        PENTING - ATURAN KONTINUITAS & DURASI (VEO 3.1 LIMIT: 8 DETIK PER SEGMEN):
+        1. Durasi Voiceover: Setiap segmen maksimal berdurasi 6-7 detik (MAKSIMAL 12-15 kata per segmen). Lebih baik sedikit lebih pendek daripada terpotong di akhir video 8 detik.
+        2. Kontinuitas Cerita: Script antar segmen harus menyambung menjadi satu narasi yang utuh dan mengalir.
+        3. Kontinuitas Visual: Jika ada lebih dari 1 segmen, 'startVisualPrompt' pada segmen berikutnya HARUS merupakan kelanjutan logis atau sama persis dengan 'endVisualPrompt' dari segmen sebelumnya agar transisi video terlihat mulus (seamless).
+        
+        PENTING - ATURAN POSE & KAMERA:
+        - Variasi Angle & Pose: Jangan kaku. Gunakan variasi shot (Close-up, Medium Shot, Full Body, Side Angle) yang logis. Jika angle berubah, deskripsikan latar belakang dari perspektif angle tersebut (misal: jika kamera dari samping, latar belakang juga terlihat dari samping).
+        - Sesuaikan pose dengan jenis produk (misal: tas dipakai/dijinjing, skincare diaplikasikan, makanan dipegang/dimakan).
         
         Untuk setiap segmen, berikan:
         1. Judul segmen
         2. Prompt visual awal (deskripsi sangat detail tentang posisi produk, ${contentMode === 'ugc' ? 'ekspresi model' : 'posisi tangan'}, pencahayaan, dan latar belakang di awal segmen)
         3. Prompt visual akhir (deskripsi sangat detail tentang perubahan posisi, aksi, atau hasil di akhir segmen)
-        4. Script voiceover yang menarik dan natural (bahasa Indonesia gaul/kasual)
+        4. Script voiceover yang menarik dan natural (bahasa Indonesia gaul/kasual, MAKSIMAL 15 KATA)
         
         PENTING UNTUK PROMPT VISUAL:
         - Harus dalam bahasa Inggris.
         - Harus sangat deskriptif (pencahayaan, sudut kamera, warna, tekstur).
-        - ${contentMode === 'ugc' ? 'Jelaskan ekspresi wajah dan bahasa tubuh kreator.' : 'Jelaskan posisi tangan, interaksi dengan produk, dan pastikan menyebutkan "first-person POV, only hands visible, no face".'}
-        - Sebutkan latar belakang "${backgroundScene}" secara spesifik.`
+        - DESKRIPSIKAN PRODUK BERDASARKAN GAMBAR 1 (Foto Produk) YANG DILAMPIRKAN.
+        - ${contentMode === 'ugc' ? 'PENTING: JANGAN mendeskripsikan ciri fisik permanen model (seperti ras, warna rambut, bentuk wajah) di dalam prompt visual, karena akan bertabrakan dengan gambar referensi. CUKUP deskripsikan AKSI, EKSPRESI WAJAH (misal: smiling, surprised), dan BAHASA TUBUH kreator.' : 'Jelaskan posisi tangan, interaksi dengan produk, dan pastikan menyebutkan "first-person POV, only hands visible, no face".'}
+        - Sebutkan latar belakang "${bgText}" secara spesifik sesuai dengan angle kamera.`
       });
 
       const response = await ai.models.generateContent({
@@ -199,68 +329,154 @@ function AppContent() {
     }
   };
 
-  const generateAllImages = async () => {
-    setIsGeneratingImages(true);
-    
+  const getGenerationPartsAndPrompt = (sceneIndex: number, frameType: 'start' | 'end', currentScenes: Scene[], isRegenerate: boolean = false) => {
+    const parts: any[] = [];
+    let modeSpecificPrompt = "";
+
+    let baseImageToUse: string | null = null;
+
+    if (isRegenerate && currentScenes[0]?.startImageUrl) {
+      baseImageToUse = currentScenes[0].startImageUrl;
+    } else if (sceneIndex === 0 && frameType === 'start') {
+      baseImageToUse = 'ORIGINAL';
+    } else {
+      if (frameType === 'end') {
+        baseImageToUse = currentScenes[sceneIndex].startImageUrl || currentScenes[0]?.startImageUrl || 'ORIGINAL';
+      } else {
+        baseImageToUse = currentScenes[sceneIndex - 1]?.endImageUrl || currentScenes[sceneIndex - 1]?.startImageUrl || currentScenes[0]?.startImageUrl || 'ORIGINAL';
+      }
+    }
+
+    if (baseImageToUse === 'ORIGINAL') {
+      parts.push({ text: "Product Reference Image:" });
+      parts.push({ inlineData: { data: getBase64(productImageData!), mimeType: getMimeType(productImageData!) } });
+
+      if (contentMode === 'ugc' && modelImageData) {
+        parts.push({ text: "Character Reference Image (CRITICAL: You MUST maintain this exact facial identity, gender, age, ethnicity, and hair style in the generated image):" });
+        parts.push({ inlineData: { data: getBase64(modelImageData), mimeType: getMimeType(modelImageData) } });
+        modeSpecificPrompt = "A UGC creator looking at the camera. The person MUST look EXACTLY like the Character Reference Image. Use the EXACT SAME face, skin tone, hair style, and gender. Maintain 100% facial consistency. The pose should be natural and not stiff. Include the product from the Product Reference Image. ";
+      } else if (contentMode === 'pov') {
+        modeSpecificPrompt = `First-person POV, looking down at hands holding or interacting with the product. Use Product Reference Image for the product. ${handGender} hands, ${handSkinTone} skin tone, wearing ${handClothing}. NO FACE VISIBLE. `;
+      }
+    } else if (baseImageToUse) {
+      const base64Data = baseImageToUse.split(',')[1];
+      const mimeType = baseImageToUse.split(';')[0].split(':')[1];
+
+      parts.push({ text: "CHARACTER & PRODUCT REFERENCE IMAGE:\n(Use this ONLY for character identity, face, hair, clothing, and product details. DO NOT copy the pose or action from this image!)" });
+      parts.push({ inlineData: { data: base64Data, mimeType: mimeType } });
+
+      if (contentMode === 'ugc') {
+        modeSpecificPrompt = "A UGC creator. CRITICAL INSTRUCTION: You must keep the exact same person and product from the reference image, but you MUST completely change their pose, action, and camera angle to match the NEW SCENE DESCRIPTION below. DO NOT copy the pose from the reference image. ";
+      } else if (contentMode === 'pov') {
+        modeSpecificPrompt = `First-person POV. Keep the hands and product consistent with the reference, but completely change the action to match the NEW SCENE DESCRIPTION below. `;
+      }
+    }
+
+    if (backgroundType === 'image' && backgroundImageData) {
+      parts.push({ text: "BACKGROUND REFERENCE IMAGE:\n(Use this exact environment, setting, and lighting as the background for the scene.)" });
+      parts.push({ inlineData: { data: getBase64(backgroundImageData), mimeType: getMimeType(backgroundImageData) } });
+    }
+
+    return { parts, modeSpecificPrompt };
+  };
+
+  const generateSingleImage = async (sceneIndex: number, frameType: 'start' | 'end', customInstruction: string = "") => {
     const updatedScenes = [...scenes];
+    updatedScenes[sceneIndex].status = 'generating_images';
+    updatedScenes[sceneIndex].generatingFrame = frameType;
+    setScenes([...updatedScenes]);
     
-    for (let i = 0; i < updatedScenes.length; i++) {
-      updatedScenes[i].status = 'generating_images';
-      setScenes([...updatedScenes]);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const modelName = aiQuality === 'pro' ? 'gemini-3.1-flash-image-preview' : 'gemini-2.5-flash-image';
       
-      try {
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const modelName = aiQuality === 'pro' ? 'gemini-3.1-flash-image-preview' : 'gemini-2.5-flash-image';
-        
-        const baseParts: any[] = [
-          { inlineData: { data: getBase64(productImageData!), mimeType: getMimeType(productImageData!) } }
-        ];
+      const { parts, modeSpecificPrompt } = getGenerationPartsAndPrompt(sceneIndex, frameType, updatedScenes, !!customInstruction);
 
-        let modeSpecificPrompt = "";
-        if (contentMode === 'ugc' && modelImageData) {
-          baseParts.push({ inlineData: { data: getBase64(modelImageData), mimeType: getMimeType(modelImageData) } });
-          modeSpecificPrompt = "A UGC creator looking at the camera. ";
-        } else if (contentMode === 'pov') {
-          modeSpecificPrompt = `First-person POV, looking down at hands holding or interacting with the product. ${handGender} hands, ${handSkinTone} skin tone, wearing ${handClothing}. NO FACE VISIBLE. `;
-        }
+      const visualPrompt = frameType === 'start' ? updatedScenes[sceneIndex].startVisualPrompt : updatedScenes[sceneIndex].endVisualPrompt;
+      const bgPrompt = (backgroundType === 'image' && backgroundImageData) ? 'Use the provided BACKGROUND REFERENCE IMAGE' : (backgroundType === 'custom' ? customBackground : backgroundScene);
+      let finalPrompt = `Generate a photorealistic image.\n\n${modeSpecificPrompt}\n\nNEW SCENE DESCRIPTION (THIS IS THE MOST IMPORTANT PART - YOU MUST DRAW THIS EXACT ACTION/POSE):\n${visualPrompt}\n\nBackground: ${bgPrompt}\nHigh quality, cinematic lighting.`;
+      
+      if (customInstruction) {
+        finalPrompt += `\n\nUSER REVISION INSTRUCTION (Apply this specific change to the scene): ${customInstruction}`;
+      }
 
-        // Generate Start Image
-        const startResponse = await ai.models.generateContent({
-          model: modelName,
-          contents: {
-            parts: [
-              ...baseParts,
-              { text: `Generate a photorealistic image. ${modeSpecificPrompt} ${updatedScenes[i].startVisualPrompt}. Background: ${backgroundScene}. High quality, cinematic lighting.` }
-            ]
-          },
-          config: aiQuality === 'pro' ? { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } } : undefined
-        });
-        updatedScenes[i].startImageUrl = extractImage(startResponse);
-
-        // Generate End Image
-        const endResponse = await ai.models.generateContent({
-          model: modelName,
-          contents: {
-            parts: [
-              ...baseParts,
-              { text: `Generate a photorealistic image. ${modeSpecificPrompt} ${updatedScenes[i].endVisualPrompt}. Background: ${backgroundScene}. High quality, cinematic lighting.` }
-            ]
-          },
-          config: aiQuality === 'pro' ? { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } } : undefined
-        });
-        updatedScenes[i].endImageUrl = extractImage(endResponse);
-        
-        updatedScenes[i].status = 'images_done';
-      } catch (err: any) {
-        updatedScenes[i].status = 'error';
-        updatedScenes[i].error = err.message;
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: {
+          parts: [
+            ...parts,
+            { text: finalPrompt }
+          ]
+        },
+        config: aiQuality === 'pro' ? { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } } : undefined
+      });
+      
+      const imageUrl = extractImage(response);
+      if (frameType === 'start') {
+        updatedScenes[sceneIndex].startImageUrl = imageUrl;
+      } else {
+        updatedScenes[sceneIndex].endImageUrl = imageUrl;
       }
       
-      setScenes([...updatedScenes]);
+      updatedScenes[sceneIndex].status = 'images_done';
+      updatedScenes[sceneIndex].generatingFrame = undefined;
+    } catch (err: any) {
+      updatedScenes[sceneIndex].status = 'error';
+      updatedScenes[sceneIndex].error = err.message;
+      updatedScenes[sceneIndex].generatingFrame = undefined;
     }
     
-    setIsGeneratingImages(false);
-    setShowTutorialModal(true);
+    setScenes([...updatedScenes]);
+  };
+
+  const generateSceneImages = async (sceneIndex: number) => {
+    const updatedScenes = [...scenes];
+    updatedScenes[sceneIndex].status = 'generating_images';
+    updatedScenes[sceneIndex].generatingFrame = 'both';
+    setScenes([...updatedScenes]);
+    
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const modelName = aiQuality === 'pro' ? 'gemini-3.1-flash-image-preview' : 'gemini-2.5-flash-image';
+      
+      // Generate Start Image
+      const startData = getGenerationPartsAndPrompt(sceneIndex, 'start', updatedScenes);
+      const bgPrompt = (backgroundType === 'image' && backgroundImageData) ? 'Use the provided BACKGROUND REFERENCE IMAGE' : (backgroundType === 'custom' ? customBackground : backgroundScene);
+      const startResponse = await ai.models.generateContent({
+        model: modelName,
+        contents: {
+          parts: [
+            ...startData.parts,
+            { text: `Generate a photorealistic image.\n\n${startData.modeSpecificPrompt}\n\nNEW SCENE DESCRIPTION (THIS IS THE MOST IMPORTANT PART - YOU MUST DRAW THIS EXACT ACTION/POSE):\n${updatedScenes[sceneIndex].startVisualPrompt}\n\nBackground: ${bgPrompt}\nHigh quality, cinematic lighting.` }
+          ]
+        },
+        config: aiQuality === 'pro' ? { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } } : undefined
+      });
+      updatedScenes[sceneIndex].startImageUrl = extractImage(startResponse);
+
+      // Generate End Image
+      const endData = getGenerationPartsAndPrompt(sceneIndex, 'end', updatedScenes);
+      const endResponse = await ai.models.generateContent({
+        model: modelName,
+        contents: {
+          parts: [
+            ...endData.parts,
+            { text: `Generate a photorealistic image.\n\n${endData.modeSpecificPrompt}\n\nNEW SCENE DESCRIPTION (THIS IS THE MOST IMPORTANT PART - YOU MUST DRAW THIS EXACT ACTION/POSE):\n${updatedScenes[sceneIndex].endVisualPrompt}\n\nBackground: ${bgPrompt}\nHigh quality, cinematic lighting.` }
+          ]
+        },
+        config: aiQuality === 'pro' ? { imageConfig: { aspectRatio: "9:16", imageSize: "1K" } } : undefined
+      });
+      updatedScenes[sceneIndex].endImageUrl = extractImage(endResponse);
+      
+      updatedScenes[sceneIndex].status = 'images_done';
+      updatedScenes[sceneIndex].generatingFrame = undefined;
+    } catch (err: any) {
+      updatedScenes[sceneIndex].status = 'error';
+      updatedScenes[sceneIndex].error = err.message;
+      updatedScenes[sceneIndex].generatingFrame = undefined;
+    }
+    
+    setScenes([...updatedScenes]);
   };
 
   const handleGenerateVideo = async (sceneIndex: number) => {
@@ -354,7 +570,11 @@ function AppContent() {
       prompt = `Camera: First-person POV, looking down at hands.\nContext: Hands interacting with a product. NO FACE VISIBLE.\nEnvironment: ${backgroundScene}\nAction: Transition smoothly from the start frame to the end frame. ${scene.startVisualPrompt} -> ${scene.endVisualPrompt}\nNegative prompt: face, head, person looking at camera.`;
     }
     navigator.clipboard.writeText(prompt);
-    alert("Prompt video berhasil disalin! Gunakan prompt ini di Google AI Studio (Veo 3.1) bersama dengan gambar awal dan akhir.");
+    setAlertMsg({
+      title: "Berhasil Disalin",
+      message: "Prompt video berhasil disalin! Gunakan prompt ini di Google AI Studio (Veo 3.1) bersama dengan gambar awal dan akhir.",
+      type: 'success'
+    });
   };
 
   // --- VIEWS ---
@@ -382,14 +602,32 @@ function AppContent() {
               FrameFlow membantu Anda merancang storyboard, menghasilkan aset visual, dan membuat video iklan bergaya UGC atau POV hanya dalam hitungan menit menggunakan kekuatan AI.
             </p>
             <button 
-              onClick={() => setView('mode')}
+              onClick={() => setView('dashboard')}
               className="inline-flex items-center gap-2 px-8 py-4 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-full transition-all hover:scale-105 shadow-xl shadow-emerald-500/20"
             >
-              Mulai Sekarang <ArrowRight className="w-5 h-5" />
+              Buka Dashboard <ArrowRight className="w-5 h-5" />
             </button>
           </div>
         </main>
       </div>
+    );
+  }
+
+  if (view === 'dashboard') {
+    return (
+      <Dashboard 
+        onNewProject={() => setView('mode')}
+        onOpenProject={handleOpenProject}
+      />
+    );
+  }
+
+  if (view === 'editor') {
+    return (
+      <VideoEditor 
+        scenes={scenes}
+        onBack={() => setView('workspace')}
+      />
     );
   }
 
@@ -404,6 +642,12 @@ function AppContent() {
               </div>
               <h1 className="text-xl font-semibold tracking-tight">FrameFlow</h1>
             </div>
+            <button 
+              onClick={() => setView('dashboard')}
+              className="text-sm font-medium text-zinc-400 hover:text-emerald-400 transition-colors"
+            >
+              Dashboard
+            </button>
           </div>
         </header>
 
@@ -479,14 +723,37 @@ function AppContent() {
           
           <div className="flex items-center gap-4">
             <button 
+              onClick={() => setView('dashboard')}
+              className="text-sm font-medium text-zinc-400 hover:text-emerald-400 transition-colors"
+            >
+              Dashboard
+            </button>
+            <button 
+              onClick={handleSaveProject}
+              className="flex items-center gap-2 text-sm text-zinc-400 hover:text-emerald-400 transition-colors"
+              title="Simpan Proyek"
+            >
+              <Save className="w-4 h-4" />
+              <span className="hidden sm:inline">Simpan</span>
+            </button>
+            {scenes.some(s => s.videoUrl) && (
+              <button 
+                onClick={() => setView('editor')}
+                className="flex items-center gap-2 text-sm text-zinc-900 bg-emerald-500 hover:bg-emerald-400 px-3 py-1.5 rounded-lg font-medium transition-colors shadow-lg shadow-emerald-500/20"
+              >
+                <PlaySquare className="w-4 h-4" />
+                <span className="hidden sm:inline">Editor Video</span>
+              </button>
+            )}
+            <button 
               onClick={resetWorkspace}
-              className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors"
+              className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors ml-4 border-l border-zinc-800 pl-4"
               title="Reset Konfigurasi"
             >
               <RotateCcw className="w-4 h-4" />
               <span className="hidden sm:inline">Reset</span>
             </button>
-            <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800">
+            <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800 ml-2">
               <button 
                 onClick={() => handleQualityChange('free')}
                 className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${aiQuality === 'free' ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
@@ -511,9 +778,13 @@ function AppContent() {
           <div className="flex items-center gap-4">
             {[1, 2, 3].map((step) => (
               <React.Fragment key={step}>
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-colors ${currentStep === step ? (contentMode === 'ugc' ? 'bg-emerald-500 text-zinc-950' : 'bg-blue-500 text-zinc-950') : currentStep > step ? 'bg-zinc-800 text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-500'}`}>
+                <button 
+                  onClick={() => setCurrentStep(step as 1 | 2 | 3)}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm transition-all hover:scale-110 cursor-pointer ${currentStep === step ? (contentMode === 'ugc' ? 'bg-emerald-500 text-zinc-950 shadow-lg shadow-emerald-500/20' : 'bg-blue-500 text-zinc-950 shadow-lg shadow-blue-500/20') : currentStep > step ? 'bg-zinc-800 text-white hover:bg-zinc-700' : 'bg-zinc-900 border border-zinc-800 text-zinc-500 hover:border-zinc-700'}`}
+                  title={`Pergi ke Langkah ${step}`}
+                >
                   {step}
-                </div>
+                </button>
                 {step < 3 && (
                   <div className={`w-16 h-1 rounded-full ${currentStep > step ? 'bg-zinc-800' : 'bg-zinc-900'}`} />
                 )}
@@ -533,22 +804,81 @@ function AppContent() {
         {currentStep === 1 && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold mb-2">Siapkan Aset Visual</h2>
-              <p className="text-zinc-400">Unggah foto produk dan atur karakter untuk video Anda.</p>
+              <h2 className="text-2xl font-bold mb-2">Informasi Produk</h2>
+              <p className="text-zinc-400">Unggah foto produk dan lengkapi detailnya.</p>
             </div>
 
-            <div className="grid md:grid-cols-2 gap-6">
-              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-6 max-w-2xl mx-auto">
+              <div>
                 <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
                   <ImageIcon className="w-5 h-5 text-zinc-400" /> Foto Produk Utama
                 </h3>
                 <ImageUploader 
                   label="Foto Produk" 
                   image={productImageData} 
-                  onImageChange={(_, d) => setProductImageData(d)} 
+                  onImageChange={handleProductImageUpload} 
                 />
               </div>
 
+              <div className="relative">
+                {isGeneratingProductDetails && (
+                  <div className="absolute inset-0 bg-zinc-900/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center rounded-xl border border-emerald-500/30">
+                    <Loader2 className="w-6 h-6 text-emerald-500 animate-spin mb-2" />
+                    <span className="text-sm text-emerald-400 font-medium">Menganalisis produk...</span>
+                  </div>
+                )}
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-400 mb-2">Nama Produk</label>
+                    <input 
+                      type="text" 
+                      value={productName}
+                      onChange={e => setProductName(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                      placeholder="Contoh: Serum Wajah Glowing"
+                    />
+                  </div>
+                  
+                  <div>
+                    <div className="flex justify-between items-end mb-2">
+                      <label className="block text-sm font-medium text-zinc-400">Detail & Keunggulan Produk</label>
+                      <button 
+                        onClick={() => handleProductImageUpload(null, productImageData)}
+                        disabled={isGeneratingProductDetails || !productImageData}
+                        className="text-xs flex items-center gap-1 text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        Regenerate dari Foto
+                      </button>
+                    </div>
+                    <textarea 
+                      value={productDetails}
+                      onChange={e => setProductDetails(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none"
+                      placeholder="Contoh: Mengandung Vitamin C, mencerahkan dalam 7 hari, tekstur ringan tidak lengket..."
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-4 max-w-2xl mx-auto">
+              <button onClick={handleNextStep} className={`px-8 py-3 text-white font-medium rounded-xl transition-colors flex items-center gap-2 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}>
+                Lanjut ke Pengaturan Visual <ArrowRight className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: Details */}
+        {currentStep === 2 && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-bold mb-2">Pengaturan Visual & Karakter</h2>
+              <p className="text-zinc-400">Atur karakter model dan latar belakang untuk video Anda.</p>
+            </div>
+
+            <div className="flex flex-col gap-6 max-w-2xl mx-auto">
               <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
                 {contentMode === 'ugc' ? (
                   <>
@@ -616,104 +946,110 @@ function AppContent() {
                   </>
                 )}
               </div>
-            </div>
 
-            <div className="flex justify-end pt-4">
-              <button onClick={handleNextStep} className={`px-8 py-3 text-white font-medium rounded-xl transition-colors flex items-center gap-2 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}>
-                Lanjut ke Detail Produk <ArrowRight className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Step 2: Details */}
-        {currentStep === 2 && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold mb-2">Detail Produk & Latar</h2>
-              <p className="text-zinc-400">Berikan informasi tentang produk agar AI dapat membuat script yang relevan.</p>
-            </div>
-
-            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-6 max-w-2xl mx-auto">
-              <div>
-                <label className="block text-sm font-medium text-zinc-400 mb-2">Nama Produk</label>
-                <input 
-                  type="text" 
-                  value={productName}
-                  onChange={e => setProductName(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                  placeholder="Contoh: Serum Wajah Glowing"
-                />
-              </div>
-              
-              <div>
-                <div className="flex justify-between items-end mb-2">
-                  <label className="block text-sm font-medium text-zinc-400">Detail & Keunggulan Produk</label>
-                  <button 
-                    onClick={async () => {
-                      if (!productImageData) {
-                        setError("Unggah foto produk di langkah sebelumnya untuk menggunakan fitur ini.");
-                        return;
-                      }
-                      setIsGeneratingProductDetails(true);
-                      try {
-                        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-                        const response = await ai.models.generateContent({
-                          model: 'gemini-3.1-flash-preview',
-                          contents: {
-                            parts: [
-                              { inlineData: { data: getBase64(productImageData), mimeType: getMimeType(productImageData) } },
-                              { text: "Analisis gambar produk ini dan buatkan deskripsi singkat serta 3-4 keunggulan utamanya dalam bahasa Indonesia yang menarik untuk materi iklan." }
-                            ]
-                          }
-                        });
-                        setProductDetails(response.text || "");
-                      } catch (err) {
-                        console.error(err);
-                      } finally {
-                        setIsGeneratingProductDetails(false);
-                      }
-                    }}
-                    disabled={isGeneratingProductDetails || !productImageData}
-                    className="text-xs flex items-center gap-1 text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
-                  >
-                    {isGeneratingProductDetails ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                    Auto-Generate dari Foto
-                  </button>
-                </div>
-                <textarea 
-                  value={productDetails}
-                  onChange={e => setProductDetails(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none"
-                  placeholder="Contoh: Mengandung Vitamin C, mencerahkan dalam 7 hari, tekstur ringan tidak lengket..."
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-zinc-400 mb-2">Latar Belakang Video</label>
-                <select 
-                  value={backgroundScene}
-                  onChange={e => setBackgroundScene(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors appearance-none"
-                >
-                  {BACKGROUND_OPTIONS.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-zinc-400 mb-2">Jumlah Segmen Video</label>
-                <div className="flex gap-2">
-                  {[1, 2, 3].map(num => (
-                    <button 
-                      key={num}
-                      onClick={() => setNumSegments(num)}
-                      className={`flex-1 py-3 rounded-xl font-medium border transition-colors ${numSegments === num ? (contentMode === 'ugc' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-blue-500/20 border-blue-500 text-blue-400') : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-6">
+                <div>
+                  <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
+                    <ImageIcon className="w-5 h-5 text-zinc-400" /> Latar & Durasi
+                  </h3>
+                  <label className="block text-sm font-medium text-zinc-400 mb-2">Latar Belakang Video</label>
+                  <div className="flex gap-2 mb-4">
+                    <button
+                      onClick={() => setBackgroundType('preset')}
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${backgroundType === 'preset' ? (contentMode === 'ugc' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-blue-500/20 border-blue-500 text-blue-400') : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
                     >
-                      {num} Segmen
+                      Pilih Tema
                     </button>
-                  ))}
+                    <button
+                      onClick={() => setBackgroundType('custom')}
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${backgroundType === 'custom' ? (contentMode === 'ugc' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-blue-500/20 border-blue-500 text-blue-400') : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
+                    >
+                      Tulis Sendiri
+                    </button>
+                    <button
+                      onClick={() => setBackgroundType('image')}
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-colors ${backgroundType === 'image' ? (contentMode === 'ugc' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-blue-500/20 border-blue-500 text-blue-400') : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
+                    >
+                      Upload Gambar
+                    </button>
+                  </div>
+
+                  {backgroundType === 'preset' && (
+                    <select 
+                      value={backgroundScene}
+                      onChange={e => setBackgroundScene(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors appearance-none"
+                    >
+                      {BACKGROUND_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  )}
+                  
+                  {backgroundType === 'custom' && (
+                    <textarea
+                      value={customBackground}
+                      onChange={e => setCustomBackground(e.target.value)}
+                      placeholder="Contoh: Kamar tidur estetik dengan lampu neon ungu, atau Kafe outdoor dengan pemandangan kota..."
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors resize-none h-24"
+                    />
+                  )}
+
+                  {backgroundType === 'image' && (
+                    <div className="mt-2">
+                      <ImageUploader
+                        label="Upload Background"
+                        image={backgroundImageData}
+                        onImageChange={(_, dataUrl) => setBackgroundImageData(dataUrl)}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {contentMode === 'ugc' && (
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-400 mb-2">Gaya Audio / Voiceover</label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setAudioStyle('talking_head')}
+                        className={`flex-1 py-3 rounded-xl text-sm font-medium border transition-colors ${audioStyle === 'talking_head' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
+                      >
+                        Talking Head (Kreator Berbicara)
+                      </button>
+                      <button
+                        onClick={() => setAudioStyle('voiceover')}
+                        className={`flex-1 py-3 rounded-xl text-sm font-medium border transition-colors ${audioStyle === 'voiceover' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
+                      >
+                        Voiceover (Suara Latar Saja)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-zinc-400 mb-2">Konsep & Arahan Video (Opsional)</label>
+                  <textarea
+                    value={videoConcept}
+                    onChange={e => setVideoConcept(e.target.value)}
+                    placeholder="Contoh: Segmen 1 kamera dari depan (Medium Shot), Segmen 2 kamera dari samping (Close-up), Segmen 3 dari belakang. Pose harus elegan dan natural."
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors resize-none h-24"
+                  />
+                  <p className="text-xs text-zinc-500 mt-2">Berikan arahan spesifik tentang angle kamera, pose, atau alur cerita jika ada.</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-zinc-400 mb-2">Jumlah Segmen Video</label>
+                  <div className="flex gap-2">
+                    {[1, 2, 3].map(num => (
+                      <button 
+                        key={num}
+                        onClick={() => setNumSegments(num)}
+                        className={`flex-1 py-3 rounded-xl font-medium border transition-colors ${numSegments === num ? (contentMode === 'ugc' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-blue-500/20 border-blue-500 text-blue-400') : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
+                      >
+                        {num} Segmen
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -743,7 +1079,7 @@ function AppContent() {
               </div>
             ) : scenes.length > 0 ? (
               <>
-                <div className="flex justify-between items-center mb-8">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                   <div>
                     <h2 className="text-2xl font-bold mb-1">Hasil Storyboard</h2>
                     <p className="text-zinc-400">Periksa adegan dan script, lalu generate gambar visualnya.</p>
@@ -756,13 +1092,30 @@ function AppContent() {
                       Edit Detail
                     </button>
                     <button 
-                      onClick={generateAllImages}
-                      disabled={isGeneratingImages || scenes.some(s => s.status === 'generating_images' || s.status === 'images_done')}
-                      className={`px-6 py-2 text-white font-medium rounded-xl transition-colors flex items-center gap-2 disabled:opacity-50 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}
+                      onClick={handleSaveProject}
+                      className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
                     >
-                      {isGeneratingImages ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
-                      Generate Semua Gambar
+                      <Save className="w-4 h-4" /> Simpan Progres
                     </button>
+                  </div>
+                </div>
+
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 mb-4 flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="text-sm text-amber-200/80">
+                    <p>
+                      <strong>Penting:</strong> Gambar dan video yang di-generate akan disimpan secara lokal di browser ini. 
+                      Jangan menghapus cache/data browser agar aset tidak hilang. Segera download video setelah selesai!
+                    </p>
+                  </div>
+                </div>
+
+                <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3 mb-8 flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" />
+                  <div className="text-sm text-blue-200/80">
+                    <p>
+                      <strong>Info Limit AI:</strong> Penggunaan AI (Teks & Gambar) menggunakan kuota Gemini API. Versi gratis umumnya dibatasi ~15 request per menit dan 1500 per hari. Jika terjadi error "Quota Exceeded", harap tunggu sejenak atau gunakan API Key Anda sendiri di menu pengaturan.
+                    </p>
                   </div>
                 </div>
 
@@ -785,21 +1138,53 @@ function AppContent() {
                               <h4 className="text-sm font-medium text-zinc-400">Frame Awal</h4>
                             </div>
                             <div className="aspect-[9/16] bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden relative group">
+                              {scene.status === 'generating_images' && (scene.generatingFrame === 'start' || scene.generatingFrame === 'both') && (
+                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 animate-pulse shadow-[inset_0_0_60px_rgba(16,185,129,0.5)] pointer-events-none">
+                                  <span className="text-white/60 font-medium tracking-widest uppercase text-sm drop-shadow-md">Generating...</span>
+                                </div>
+                              )}
+                              
                               {scene.startImageUrl ? (
-                                <img src={scene.startImageUrl} alt="Start Frame" className="w-full h-full object-cover" />
+                                <>
+                                  <img src={scene.startImageUrl} alt="Start Frame" className="w-full h-full object-cover" />
+                                  <div className={`absolute bottom-2 right-2 flex gap-2 transition-opacity duration-200 z-20 ${scene.status === 'generating_images' && (scene.generatingFrame === 'start' || scene.generatingFrame === 'both') ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                                    <a
+                                      href={scene.startImageUrl}
+                                      download={`scene-${index + 1}-start.jpg`}
+                                      className="p-2 bg-black/60 hover:bg-black/80 text-white rounded-lg backdrop-blur-sm transition-colors flex items-center justify-center"
+                                      title="Download Gambar"
+                                    >
+                                      <Download className="w-4 h-4" />
+                                    </a>
+                                    <button
+                                      onClick={() => setRegenerateModal({ isOpen: true, sceneIndex: index, frameType: 'start', customPrompt: '' })}
+                                      disabled={scene.status === 'generating_images'}
+                                      className="p-2 bg-black/60 hover:bg-black/80 text-white rounded-lg backdrop-blur-sm transition-colors flex items-center justify-center disabled:opacity-50"
+                                      title="Regenerate Gambar"
+                                    >
+                                      {scene.status === 'generating_images' && (scene.generatingFrame === 'start' || scene.generatingFrame === 'both') ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                      ) : (
+                                        <RefreshCw className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                  </div>
+                                </>
                               ) : (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-600 p-6 text-center">
-                                  {scene.status === 'generating_images' ? (
-                                    <>
-                                      <Loader2 className="w-8 h-8 animate-spin mb-2" />
-                                      <span className="text-sm">Generating...</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <ImageIcon className="w-8 h-8 mb-2 opacity-50" />
-                                      <span className="text-xs">Menunggu generate gambar</span>
-                                    </>
-                                  )}
+                                  <ImageIcon className="w-8 h-8 mb-2 opacity-20" />
+                                  <span className="text-xs mb-3 opacity-70">Menunggu generate gambar</span>
+                                  <button
+                                    onClick={() => generateSingleImage(index, 'start')}
+                                    disabled={scene.status === 'generating_images'}
+                                    className="text-xs px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-300 transition-colors flex items-center gap-2 disabled:opacity-50 z-20"
+                                  >
+                                    {scene.status === 'generating_images' && (scene.generatingFrame === 'start' || scene.generatingFrame === 'both') ? (
+                                      <><Loader2 className="w-3 h-3 animate-spin" /> Generating...</>
+                                    ) : (
+                                      "Generate"
+                                    )}
+                                  </button>
                                 </div>
                               )}
                             </div>
@@ -812,21 +1197,53 @@ function AppContent() {
                               <h4 className="text-sm font-medium text-zinc-400">Frame Akhir</h4>
                             </div>
                             <div className="aspect-[9/16] bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden relative group">
+                              {scene.status === 'generating_images' && (scene.generatingFrame === 'end' || scene.generatingFrame === 'both') && (
+                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 animate-pulse shadow-[inset_0_0_60px_rgba(16,185,129,0.5)] pointer-events-none">
+                                  <span className="text-white/60 font-medium tracking-widest uppercase text-sm drop-shadow-md">Generating...</span>
+                                </div>
+                              )}
+
                               {scene.endImageUrl ? (
-                                <img src={scene.endImageUrl} alt="End Frame" className="w-full h-full object-cover" />
+                                <>
+                                  <img src={scene.endImageUrl} alt="End Frame" className="w-full h-full object-cover" />
+                                  <div className={`absolute bottom-2 right-2 flex gap-2 transition-opacity duration-200 z-20 ${scene.status === 'generating_images' && (scene.generatingFrame === 'end' || scene.generatingFrame === 'both') ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                                    <a
+                                      href={scene.endImageUrl}
+                                      download={`scene-${index + 1}-end.jpg`}
+                                      className="p-2 bg-black/60 hover:bg-black/80 text-white rounded-lg backdrop-blur-sm transition-colors flex items-center justify-center"
+                                      title="Download Gambar"
+                                    >
+                                      <Download className="w-4 h-4" />
+                                    </a>
+                                    <button
+                                      onClick={() => setRegenerateModal({ isOpen: true, sceneIndex: index, frameType: 'end', customPrompt: '' })}
+                                      disabled={scene.status === 'generating_images'}
+                                      className="p-2 bg-black/60 hover:bg-black/80 text-white rounded-lg backdrop-blur-sm transition-colors flex items-center justify-center disabled:opacity-50"
+                                      title="Regenerate Gambar"
+                                    >
+                                      {scene.status === 'generating_images' && (scene.generatingFrame === 'end' || scene.generatingFrame === 'both') ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                      ) : (
+                                        <RefreshCw className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                  </div>
+                                </>
                               ) : (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-600 p-6 text-center">
-                                  {scene.status === 'generating_images' ? (
-                                    <>
-                                      <Loader2 className="w-8 h-8 animate-spin mb-2" />
-                                      <span className="text-sm">Generating...</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <ImageIcon className="w-8 h-8 mb-2 opacity-50" />
-                                      <span className="text-xs">Menunggu generate gambar</span>
-                                    </>
-                                  )}
+                                  <ImageIcon className="w-8 h-8 mb-2 opacity-20" />
+                                  <span className="text-xs mb-3 opacity-70">Menunggu generate gambar</span>
+                                  <button
+                                    onClick={() => generateSingleImage(index, 'end')}
+                                    disabled={scene.status === 'generating_images'}
+                                    className="text-xs px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-300 transition-colors flex items-center gap-2 disabled:opacity-50 z-20"
+                                  >
+                                    {scene.status === 'generating_images' && (scene.generatingFrame === 'end' || scene.generatingFrame === 'both') ? (
+                                      <><Loader2 className="w-3 h-3 animate-spin" /> Generating...</>
+                                    ) : (
+                                      "Generate"
+                                    )}
+                                  </button>
                                 </div>
                               )}
                             </div>
@@ -836,10 +1253,22 @@ function AppContent() {
 
                         {/* Script & Video Actions */}
                         <div className="bg-zinc-950 rounded-xl border border-zinc-800 p-5">
-                          <h4 className="text-sm font-medium text-zinc-400 mb-2 flex items-center gap-2">
-                            <FileText className="w-4 h-4" /> Voiceover Script
-                          </h4>
-                          <p className="text-lg font-medium text-white mb-6">"{scene.script}"</p>
+                          <div className="flex justify-between items-start mb-4">
+                            <div>
+                              <h4 className="text-sm font-medium text-zinc-400 mb-2 flex items-center gap-2">
+                                <FileText className="w-4 h-4" /> Voiceover Script
+                              </h4>
+                              <p className="text-lg font-medium text-white">"{scene.script}"</p>
+                            </div>
+                            <button
+                              onClick={() => generateSceneImages(index)}
+                              disabled={scene.status === 'generating_images'}
+                              className={`px-4 py-2 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 ${contentMode === 'ugc' ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-blue-500 hover:bg-blue-600'}`}
+                            >
+                              {scene.status === 'generating_images' ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4" />}
+                              Generate 2 Gambar
+                            </button>
+                          </div>
                           
                           <div className="flex flex-wrap gap-3 pt-4 border-t border-zinc-800">
                             <button 
@@ -882,11 +1311,102 @@ function AppContent() {
                     </div>
                   ))}
                 </div>
+
+                {/* External Video Generation CTA */}
+                <div className="mt-12 bg-zinc-900 border border-zinc-800 rounded-2xl p-8 text-center shadow-xl">
+                  <div className="w-16 h-16 bg-emerald-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                    <Video className="w-8 h-8 text-emerald-400" />
+                  </div>
+                  <h3 className="text-2xl font-bold text-white mb-3">Lanjutkan Pembuatan Video</h3>
+                  <p className="text-zinc-400 max-w-2xl mx-auto mb-8">
+                    Gunakan gambar Frame Awal dan Akhir yang telah di-generate di atas beserta Video Prompt-nya untuk membuat video transisi yang mulus di platform AI Video Generator gratis terbaik berikut:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-w-4xl mx-auto">
+                    <a 
+                      href="https://labs.google/fx/id/tools/flow" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex flex-col items-center p-4 bg-zinc-950 border border-zinc-800 hover:border-emerald-500/50 rounded-xl transition-colors group"
+                    >
+                      <span className="font-bold text-white group-hover:text-emerald-400 mb-1">Google Flow AI</span>
+                      <span className="text-xs text-zinc-500">Gratis & Cepat</span>
+                    </a>
+                    <a 
+                      href="https://lumalabs.ai/dream-machine" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex flex-col items-center p-4 bg-zinc-950 border border-zinc-800 hover:border-emerald-500/50 rounded-xl transition-colors group"
+                    >
+                      <span className="font-bold text-white group-hover:text-emerald-400 mb-1">Luma Dream Machine</span>
+                      <span className="text-xs text-zinc-500">Kualitas Tinggi</span>
+                    </a>
+                    <a 
+                      href="https://klingai.com" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex flex-col items-center p-4 bg-zinc-950 border border-zinc-800 hover:border-emerald-500/50 rounded-xl transition-colors group"
+                    >
+                      <span className="font-bold text-white group-hover:text-emerald-400 mb-1">Kling AI</span>
+                      <span className="text-xs text-zinc-500">Gerakan Realistis</span>
+                    </a>
+                    <a 
+                      href="https://haiper.ai" 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="flex flex-col items-center p-4 bg-zinc-950 border border-zinc-800 hover:border-emerald-500/50 rounded-xl transition-colors group"
+                    >
+                      <span className="font-bold text-white group-hover:text-emerald-400 mb-1">Haiper AI</span>
+                      <span className="text-xs text-zinc-500">Gratis Harian</span>
+                    </a>
+                  </div>
+                </div>
               </>
             ) : null}
           </div>
         )}
       </main>
+
+      {/* Regenerate Modal */}
+      {regenerateModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <h3 className="text-xl font-bold text-white mb-2">Regenerate Gambar</h3>
+            <p className="text-sm text-zinc-400 mb-4">
+              Gambar akan di-generate ulang dengan mengambil referensi dari gambar sebelumnya untuk menjaga konsistensi wajah dan produk.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">
+                  Apa yang ingin diubah? (Opsional)
+                </label>
+                <textarea
+                  value={regenerateModal.customPrompt}
+                  onChange={(e) => setRegenerateModal({ ...regenerateModal, customPrompt: e.target.value })}
+                  placeholder="Misal: Buat model tersenyum, ganti warna baju jadi merah, dll. Kosongkan jika hanya ingin mengulang."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-white placeholder-zinc-600 focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none h-24"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  onClick={() => setRegenerateModal({ ...regenerateModal, isOpen: false })}
+                  className="px-4 py-2 rounded-xl font-medium text-zinc-300 hover:bg-zinc-800 transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={() => {
+                    generateSingleImage(regenerateModal.sceneIndex, regenerateModal.frameType, regenerateModal.customPrompt);
+                    setRegenerateModal({ ...regenerateModal, isOpen: false });
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors"
+                >
+                  Generate Ulang
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tutorial Modal */}
       {showTutorialModal && (
@@ -1013,6 +1533,29 @@ function AppContent() {
                 className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-medium rounded-xl transition-colors shadow-lg shadow-emerald-500/20"
               >
                 Masukkan API Key
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Alert Modal */}
+      {alertMsg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className={`flex items-center gap-3 mb-4 ${alertMsg.type === 'error' ? 'text-red-500' : 'text-emerald-500'}`}>
+              {alertMsg.type === 'error' ? <AlertTriangle className="w-6 h-6" /> : <Sparkles className="w-6 h-6" />}
+              <h3 className="text-xl font-bold text-white">{alertMsg.title}</h3>
+            </div>
+            <p className="text-zinc-400 mb-6">
+              {alertMsg.message}
+            </p>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setAlertMsg(null)}
+                className="px-4 py-2 rounded-lg font-medium bg-zinc-800 text-white hover:bg-zinc-700 transition-colors"
+              >
+                Tutup
               </button>
             </div>
           </div>

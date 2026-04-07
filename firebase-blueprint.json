@@ -1,0 +1,26 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "A video generation project containing product info, model, and scenes.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner ID" },
+        "name": { "type": "string" },
+        "productName": { "type": "string" },
+        "productDetails": { "type": "string" },
+        "backgroundScene": { "type": "string" },
+        "contentMode": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "createdAt", "expiresAt"]
+    }
+  },
+  "firestore": {
+    "/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "User projects"
+    }
+  }
+}
